@@ -35,8 +35,14 @@ export TF_VAR_compartment_id="$OCI_COMPARTMENT_ID"
 export TF_VAR_region="$REGION"
 
 # Must match the domain used at apply time so the data source resolves the same
-# domain (and the correct app to deactivate).  Defaults to the Default domain.
-export TF_VAR_domain_display_name="${OCI_DOMAIN_NAME:-Default}"
+# domain (and the correct app to deactivate).  REQUIRED — no silent fallback,
+# or destroy could target the wrong domain's app.
+if [ -z "${OCI_DOMAIN_NAME:-}" ]; then
+  echo "ERROR: OCI_DOMAIN_NAME is not set — export the domain you deployed into, e.g.:"
+  echo "ERROR:   export OCI_DOMAIN_NAME=notes-app"
+  exit 1
+fi
+export TF_VAR_domain_display_name="${OCI_DOMAIN_NAME}"
 
 # ------------------------------------------------------------------------------
 # Phase 4: Destroy static web application
