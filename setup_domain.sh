@@ -161,13 +161,13 @@ if [ -z "${PROFILE_ID}" ] || [ "${PROFILE_ID}" = "null" ]; then
   "redirectUrl": "${ENDPOINT}/ui/v1/signin",
   "active": false,
   "userAttributes": [
-    {"value":"name.givenName","seqNumber":1},
-    {"value":"name.familyName","seqNumber":2},
-    {"value":"emails.type","seqNumber":3},
-    {"value":"emails.value","seqNumber":4},
-    {"value":"emails.primary","seqNumber":5},
-    {"value":"userName","seqNumber":6},
-    {"value":"password","seqNumber":7}
+    {"value":"name.givenName","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:name.givenName","seqNumber":1},
+    {"value":"name.familyName","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:name.familyName","seqNumber":2},
+    {"value":"emails.type","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:emails.type","seqNumber":3},
+    {"value":"emails.value","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:emails.value","seqNumber":4},
+    {"value":"emails.primary","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:emails.primary","seqNumber":5},
+    {"value":"userName","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:userName","seqNumber":6},
+    {"value":"password","fullyQualifiedAttributeName":"urn:ietf:params:scim:schemas:core:2.0:User:password","seqNumber":7}
   ]
 }
 JSON
