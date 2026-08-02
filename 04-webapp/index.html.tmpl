@@ -124,6 +124,81 @@
       gap: 8px;
     }
 
+    /* ===================== Auth chooser modal ===================== */
+
+    .auth-modal {
+      max-width: 380px;
+      padding: 28px 26px 20px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .auth-modal .brand {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 14px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #2563eb, #1e40af);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+    }
+
+    .auth-modal h2 {
+      margin: 0 0 6px;
+      font-size: 20px;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+
+    .auth-modal p.sub {
+      margin: 0 0 22px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #94a3b8;
+    }
+
+    .auth-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .auth-actions button {
+      width: 100%;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .btn-primary-lg {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+    }
+    .btn-primary-lg:hover { background: #1d4ed8; }
+
+    .btn-outline-lg {
+      background: transparent;
+      color: #e5e7eb;
+      border: 1px solid #334155;
+    }
+    .btn-outline-lg:hover { background: #1e293b; }
+
+    .auth-cancel {
+      margin-top: 16px;
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 13px;
+      cursor: pointer;
+      padding: 4px;
+    }
+    .auth-cancel:hover { color: #94a3b8; }
+
     /* ===================== Busy State ===================== */
 
     .busy-overlay {
@@ -217,6 +292,23 @@
     <div class="modal-footer">
       <button id="btnModalCreate">Create</button>
     </div>
+  </div>
+</div>
+
+<!-- ===================== Auth Chooser Modal ===================== -->
+
+<div id="authModal" class="modal-backdrop">
+  <div class="modal auth-modal">
+    <div class="brand">📝</div>
+    <h2>Welcome to Notes</h2>
+    <p class="sub">Sign in to your account, or create a new one to get started.</p>
+
+    <div class="auth-actions">
+      <button id="authSignIn" class="btn-primary-lg">Sign In</button>
+      <button id="authCreate" class="btn-outline-lg">Create Account</button>
+    </div>
+
+    <button id="authCancel" class="auth-cancel">Cancel</button>
   </div>
 </div>
 
@@ -353,6 +445,17 @@
       (idToken ? "&id_token_hint=" + encodeURIComponent(idToken) : "");
 
     window.location.href = logoutUrl;
+  }
+
+  function startSignup() {
+    if (!AUTH || !AUTH.signupProfileId) {
+      setListStatus("Self-registration is not configured.");
+      return;
+    }
+    // OCI's stock sign-in page won't render the self-registration link even with
+    // show_on_login_page=true, so link straight to the hosted signup form.
+    window.location.href =
+      authBase() + "/ui/v1/signup?profileid=" + encodeURIComponent(AUTH.signupProfileId);
   }
 
   // ===================== State ======================
@@ -551,10 +654,36 @@
   document.getElementById("btnModalCreate").addEventListener("click",
     requireAuth(createFromModal, (m) => { modalStatus.textContent = m; }));
 
-  document.getElementById("btnLogin").addEventListener("click", () => {
+  // Auth chooser modal — "Sign in" opens a Sign In / Create Account chooser.
+  const authModal = document.getElementById("authModal");
+  function openAuthModal() {
+    // If self-registration isn't configured, skip the chooser and sign in directly.
+    if (!AUTH || !AUTH.signupProfileId) {
+      setListStatus("Redirecting to sign-in...");
+      startLogin().catch(e => setListStatus("Login error: " + e.message));
+      return;
+    }
+    authModal.style.display = "flex";
+  }
+  function closeAuthModal() { authModal.style.display = "none"; }
+
+  document.getElementById("btnLogin").addEventListener("click", openAuthModal);
+  document.getElementById("authSignIn").addEventListener("click", () => {
+    closeAuthModal();
     setListStatus("Redirecting to sign-in...");
     startLogin().catch(e => setListStatus("Login error: " + e.message));
   });
+  document.getElementById("authCreate").addEventListener("click", () => {
+    closeAuthModal();
+    setListStatus("Redirecting to account creation...");
+    startSignup();
+  });
+  document.getElementById("authCancel").addEventListener("click", closeAuthModal);
+  authModal.addEventListener("click", (e) => { if (e.target === authModal) closeAuthModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (authModal.style.display === "flex" && e.key === "Escape") closeAuthModal();
+  });
+
   document.getElementById("btnLogout").addEventListener("click", () => {
     setListStatus("Signing out...");
     startLogout();

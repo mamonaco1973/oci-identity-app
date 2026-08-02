@@ -165,12 +165,37 @@ envsubst '${API_BASE}' < index.html.tmpl > index.html || {
 # SPA runtime config consumed by index.html + callback.html. Not committed
 # (see .gitignore) — regenerated on every apply.
 echo "NOTE: Writing config.json..."
+# Self-registration profile — looked up by NAME (created once in the console),
+# so no profile ID has to be hard-coded or exported. apply.sh resolves its ID
+# from the domain. When found, the SPA sign-in chooser shows a "Create Account"
+# option linking to the hosted signup form; if not found, the chooser goes
+# straight to sign-in. Override the name with OCI_SIGNUP_PROFILE_NAME.
+SIGNUP_PROFILE_NAME="${OCI_SIGNUP_PROFILE_NAME:-spa-signup}"
+
+# The domain URL from Terraform can carry an explicit :443 port; strip it for the
+# identity-domains CLI endpoint.
+DOMAIN_ENDPOINT="${DOMAIN_URL/:443/}"
+
+echo "NOTE: Resolving self-registration profile '${SIGNUP_PROFILE_NAME}'..."
+SIGNUP_PROFILE_ID=$(oci identity-domains self-registration-profiles list \
+  --endpoint "${DOMAIN_ENDPOINT}" \
+  --filter "name eq \"${SIGNUP_PROFILE_NAME}\"" \
+  --query 'data.resources[0].id' --raw-output 2>/dev/null || echo "")
+
+if [ -z "${SIGNUP_PROFILE_ID}" ] || [ "${SIGNUP_PROFILE_ID}" = "null" ]; then
+  echo "NOTE: Profile '${SIGNUP_PROFILE_NAME}' not found — 'Create Account' hidden."
+  SIGNUP_PROFILE_ID=""
+else
+  echo "NOTE: Self-registration profile id - ${SIGNUP_PROFILE_ID}"
+fi
+
 cat > config.json <<EOF
 {
   "domainUrl": "${DOMAIN_URL}",
   "clientId": "${SPA_CLIENT_ID}",
   "redirectUri": "${REDIRECT_URI}",
-  "apiBaseUrl": "${API_BASE}"
+  "apiBaseUrl": "${API_BASE}",
+  "signupProfileId": "${SIGNUP_PROFILE_ID}"
 }
 EOF
 
