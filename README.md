@@ -197,17 +197,22 @@ curl -s -X DELETE https://<gateway-id>.apigateway.us-ashburn-1.oci.customer-oci.
 * [Install Terraform](https://developer.hashicorp.com/terraform/install)
 * [Install Docker](https://docs.docker.com/get-docker/) — required to build and push the Functions image to OCIR
 * `jq` and `envsubst` — used by the automation scripts
+* Your OCI user must be able to **create identity domains** and administer them.
+  You do **not** need to create a domain by hand — `setup_domain.sh` builds and
+  configures it, and end users create their own logins via self-registration.
 
 ## Download this Repository
 
 ```bash
-git clone https://github.com/mamonaco1973/oci-crud-example.git
-cd oci-crud-example
+git clone https://github.com/mamonaco1973/oci-identity-app.git
+cd oci-identity-app
 ```
 
 ## Build the Code
 
-Run [check_env](check_env.sh) to validate your environment, then run [apply](apply.sh) to provision the infrastructure.
+Just run [apply](apply.sh). It validates your environment ([check_env](check_env.sh)),
+**bootstraps the identity domain** ([setup_domain.sh](setup_domain.sh)), then
+provisions the infrastructure — no manual OCI console setup required.
 
 ```bash
 ~/oci-crud-example$ ./apply.sh
@@ -225,9 +230,26 @@ NOTE: Successfully connected to OCI.
 Initializing the backend...
 ```
 
-`apply.sh` runs in phases: it provisions the OCIR repository, **builds and pushes
-the Docker image** (`02-docker/build.sh`), then applies the Functions + API
-Gateway + NoSQL layer, and finally uploads the web frontend to Object Storage.
+`apply.sh` first runs `check_env.sh`, then **`setup_domain.sh`** to bootstrap the
+identity domain (see below). It then runs in phases: provisions the OCIR
+repository, **builds and pushes the Docker image** (`02-docker/build.sh`),
+applies the Functions + API Gateway + NoSQL layer, and finally uploads the web
+frontend to Object Storage.
+
+### Identity domain bootstrap (`setup_domain.sh`)
+
+Called automatically by `apply.sh` (and safe to run on its own). Idempotent — it
+does everything the login side needs, with **zero console clicks**:
+
+1. Creates an **External User** identity domain (the tier that supports
+   self-registration) and waits for it to go active.
+2. Enables **Access Signing Certificate** so API Gateway can validate JWTs
+   (without it, every authenticated call fails with a 500).
+3. Creates and activates a **self-registration profile** so users can create
+   their own accounts.
+4. Writes `env.sh` (`OCI_DOMAIN_NAME`, `OCI_SIGNUP_PROFILE_NAME`), which the
+   scripts source automatically. Override the domain/profile names with those
+   env vars if you like (defaults `notes-app` / `spa-signup`).
 
 ### Build Results
 
@@ -263,15 +285,24 @@ When the deployment completes, the following resources are created:
     whenever the code changes
   - The Functions pull the image on invoke—the OCI-specific "no code upload" step
 
+- **OCI IAM Identity Domains (auth):**
+  - An **External User** domain with self-registration, created and configured by
+    `setup_domain.sh` (not Terraform)
+  - A public SPA app (Authorization Code + PKCE, no secret) registered by
+    Terraform (`03-functions/identity.tf`)
+  - Users log in — or create their own account — via the hosted OCI login
+
 - **OCI API Gateway:**
   - Exposes REST-style `/notes` and `/notes/{id}` endpoints
-  - Routes requests to the appropriate Function based on HTTP method and path
+  - **Validates the caller's JWT** against the domain JWKS before invoking any
+    Function; every route requires authentication
   - Injects `{id}` as the `X-Note-Id` header for path-parameter routes
 
 - **Static Web Application (Object Storage):**
   - Public bucket configured for static website hosting
-  - `index.html` provides a lightweight browser-based interface for managing notes
-  - Frontend dynamically calls the deployed API Gateway endpoints
+  - `index.html` provides a browser-based interface with a **Sign In / Create
+    Account** chooser and PKCE login
+  - Frontend calls the deployed API Gateway endpoints with the user's token
 
 - **Automation & Validation:**
   - `apply.sh`, `destroy.sh`, and `check_env.sh` scripts automate provisioning,

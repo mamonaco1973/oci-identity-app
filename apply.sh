@@ -33,6 +33,16 @@ echo "NOTE: Running environment validation..."
 echo "NOTE: Validating the authentication domain."
 ./setup_domain.sh
 
+# setup_domain.sh created/verified the identity domain and wrote env.sh with
+# OCI_DOMAIN_NAME (+ OCI_SIGNUP_PROFILE_NAME). Load it now so the rest of the
+# deploy targets that domain. This is where OCI_DOMAIN_NAME is required — after
+# setup_domain has had its chance to produce it (not up front in check_env.sh).
+if [ -f env.sh ]; then source env.sh; fi
+if [ -z "${OCI_DOMAIN_NAME:-}" ]; then
+  echo "ERROR: OCI_DOMAIN_NAME is unset after setup_domain.sh — expected it to write env.sh."
+  exit 1
+fi
+
 # ------------------------------------------------------------------------------
 # Derive OCI identifiers from ~/.oci/config
 # ------------------------------------------------------------------------------
