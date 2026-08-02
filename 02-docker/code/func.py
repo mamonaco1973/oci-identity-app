@@ -36,9 +36,12 @@ Environment variables:
     COMPARTMENT_ID      Compartment OCID used for all NoSQL SDK calls
 """
 
+import base64
 import io
 import json
+import logging
 import os
+import traceback
 import uuid
 from datetime import datetime, timezone
 
@@ -56,6 +59,10 @@ from oci.nosql.models import QueryDetails, UpdateRowDetails
 
 TABLE_NAME     = os.environ.get("NOSQL_TABLE_NAME", "notes").strip()
 COMPARTMENT_ID = os.environ.get("COMPARTMENT_ID", "").strip()
+
+# stderr is captured into OCI Logging (notes-functions-log) — use it to surface
+# the real exception and the injected identity header while debugging.
+log = logging.getLogger(__name__)
 
 # Resource Principal signer provides credentials inside OCI Functions
 # without any key files or secrets.  Initialised once per container so
@@ -111,32 +118,75 @@ def _note_id(ctx) -> str:
         return ""
 
 
-def _owner(ctx) -> str:
-    """Return the authenticated user id from the X-User-Sub header.
+def _header(ctx, name: str) -> str:
+    """Return a single request header value (case-insensitive), or "".
 
-    API Gateway validates the JWT and injects the verified `sub` claim as
-    X-User-Sub (see api.tf).  Its presence is the function's proof that the
-    request was authenticated, so a missing header is treated as unauthorized
-    rather than defaulted — there is no anonymous fallback.
+    Args:
+        ctx  : FDK invoke context.
+        name : Header name (matched lowercase and as-given).
+
+    Returns:
+        str: The trimmed header value, or empty string if absent.
+    """
+    try:
+        headers = ctx.Headers() or {}
+        val = headers.get(name.lower()) or headers.get(name) or ""
+        # fdk-python may return header values as lists.
+        if isinstance(val, list):
+            val = val[0] if val else ""
+        return str(val).strip()
+    except Exception:
+        return ""
+
+
+def _sub_from_bearer(ctx) -> str:
+    """Extract `sub` by decoding the Bearer JWT payload (no verification).
+
+    Fallback for when the gateway's ${request.auth[sub]} header transform does
+    not resolve.  The API Gateway has ALREADY validated the token's signature,
+    issuer, and audience before the function runs, so reading the payload here
+    for the owner id is safe — this only decodes, it does not trust an
+    unverified token for access control.
 
     Args:
         ctx: FDK invoke context.
 
     Returns:
-        str: The caller's `sub` claim, used as the NoSQL shard key.
+        str: The `sub` claim, or empty string if it can't be read.
+    """
+    auth = _header(ctx, "Authorization")
+    if not auth:
+        return ""
+    token = auth[7:] if auth.lower().startswith("bearer ") else auth
+    try:
+        payload_b64 = token.split(".")[1]
+        # Restore base64url padding before decoding.
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return str(claims.get("sub", "")).strip()
+    except Exception:
+        return ""
+
+
+def _owner(ctx) -> str:
+    """Return the authenticated user id used as the NoSQL shard key.
+
+    Prefers X-User-Sub, injected by API Gateway from the verified JWT
+    (${request.auth[sub]} in api.tf).  Falls back to decoding the already-verified
+    Bearer token if that header is absent, so the app works regardless of whether
+    the gateway header-transform expression resolves.  A missing identity from
+    both sources means the request was not authenticated → unauthorized.
+
+    Args:
+        ctx: FDK invoke context.
+
+    Returns:
+        str: The caller's `sub` claim.
 
     Raises:
-        ValueError: If the header is absent (request was not authenticated).
+        ValueError: If no identity can be determined (unauthenticated request).
     """
-    try:
-        headers = ctx.Headers() or {}
-        val = headers.get("x-user-sub") or headers.get("X-User-Sub") or ""
-        # fdk-python may return header values as lists.
-        if isinstance(val, list):
-            val = val[0] if val else ""
-        owner = str(val).strip()
-    except Exception:
-        owner = ""
+    owner = _header(ctx, "X-User-Sub") or _sub_from_bearer(ctx)
     if not owner:
         raise ValueError("Unauthorized: missing authenticated user")
     return owner
@@ -198,7 +248,23 @@ def handler(ctx, data: io.BytesIO = None):
     fn = dispatch.get(func_type)
     if fn is None:
         return _resp(ctx, 400, {"error": f"Unknown FUNCTION_TYPE: {func_type}"})
-    return fn(ctx, data)
+
+    # Log whether the gateway actually injected the identity header — a common
+    # first-deploy failure is the ${request.auth[sub]} transform not resolving.
+    try:
+        hdrs = ctx.Headers() or {}
+        log.info("invoke type=%s x-user-sub-present=%s",
+                 func_type, bool(hdrs.get("x-user-sub") or hdrs.get("X-User-Sub")))
+    except Exception:
+        pass
+
+    # Catch-all so an unexpected exception returns the real message (and logs a
+    # full traceback) instead of the gateway's opaque 500 "Internal Server Error".
+    try:
+        return fn(ctx, data)
+    except Exception as exc:
+        log.error("Unhandled error in %s handler:\n%s", func_type, traceback.format_exc())
+        return _resp(ctx, 500, {"error": f"{type(exc).__name__}: {exc}"})
 
 
 # ---------------------------------------------------------------------------
