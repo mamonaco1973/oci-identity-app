@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
+  <title>Notes Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 16px;
+      background: #020617;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    section {
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    button {
+      padding: 8px 10px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: white;
+      font-size: 13px;
+    }
+
+    button.secondary { background: #475569; }
+    button.delete { background: #dc2626; }
+
+    input, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      border: 1px solid #1e293b;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 13px;
+    }
+
+    textarea { min-height: 180px; }
+
+    .note {
+      padding: 8px;
+      border-bottom: 1px solid #1e293b;
+      cursor: pointer;
+    }
+
+    .note:hover { background: #020617; }
+    .note.active { background: #1e293b; }
+
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #94a3b8;
+      white-space: pre-wrap;
+    }
+
+    /* ===================== Modal ===================== */
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal {
+      width: 100%;
+      max-width: 520px;
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 14px;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .modal-body { margin-top: 12px; }
+
+    .modal-footer {
+      margin-top: 12px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* ===================== Busy State ===================== */
+
+    .busy-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+
+    .busy-overlay.active {
+      display: flex;
+      cursor: wait;
+    }
+
+    .busy-box {
+      padding: 16px 18px;
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      font-size: 13px;
+      color: #e5e7eb;
+    }
+
+    body.busy { cursor: wait; }
+
+    body.busy button,
+    body.busy input,
+    body.busy textarea {
+      pointer-events: none;
+      opacity: 0.6;
+    }
+  </style>
+</head>
+
+<body>
+
+<header>
+  <h1>Notes Demo</h1>
+</header>
+
+<main>
+
+  <!-- Notes list -->
+  <section>
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <button id="btnRefresh" class="secondary">Refresh</button>
+      <button id="btnNew">New</button>
+    </div>
+    <div id="notes"></div>
+    <div id="listStatus" class="status"></div>
+  </section>
+
+  <!-- Editor -->
+  <section>
+    <input id="title" placeholder="Title (required)" />
+    <textarea id="note" placeholder="Note (optional)"></textarea>
+
+    <div style="display:flex; gap:8px;">
+      <button id="btnSave">Save</button>
+      <button id="btnDelete" class="delete">Delete</button>
+    </div>
+
+    <div id="status" class="status"></div>
+  </section>
+
+</main>
+
+<!-- ===================== New Note Modal ===================== -->
+
+<div id="newModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <div>New Note</div>
+      <div style="flex:1;"></div>
+      <button id="btnModalCancel" class="secondary">Cancel</button>
+    </div>
+
+    <div class="modal-body">
+      <input id="modalTitle" placeholder="Title (required)" />
+      <textarea id="modalNote" placeholder="Optional note"></textarea>
+      <div id="modalStatus" class="status"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button id="btnModalCreate">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Busy Overlay -->
+<div id="busyOverlay" class="busy-overlay">
+  <div class="busy-box">Working…</div>
+</div>
+
+<!-- Background cold-start probe readout (bottom-right, unobtrusive) -->
+<div id="probe" style="position:fixed; bottom:8px; right:10px; font-size:11px;
+     color:#64748b; font-family:ui-monospace,Menlo,Consolas,monospace;
+     z-index:500;"></div>
+
+<script>
+  // ===================== Config =====================
+  const API_BASE_URL = "${API_BASE}";
+
+  // Background probe cadence — GET /notes once a minute to keep a Function
+  // warm and measure whether that interval is enough to dodge cold starts.
+  const PROBE_INTERVAL_MS = 60000;
+
+  // ===================== State ======================
+  let notes = [];
+  let selectedId = null;
+
+  // ===================== Elements ===================
+  const elNotes      = document.getElementById("notes");
+  const elTitle      = document.getElementById("title");
+  const elNote       = document.getElementById("note");
+  const elStatus     = document.getElementById("status");
+  const elListStatus = document.getElementById("listStatus");
+
+  const modal        = document.getElementById("newModal");
+  const modalTitle   = document.getElementById("modalTitle");
+  const modalNote    = document.getElementById("modalNote");
+  const modalStatus  = document.getElementById("modalStatus");
+
+  const busyOverlay  = document.getElementById("busyOverlay");
+
+  // ===================== Busy State =================
+  function setBusy(isBusy) {
+    document.body.classList.toggle("busy", isBusy);
+    busyOverlay.classList.toggle("active", isBusy);
+  }
+
+  // ===================== Helpers ====================
+  async function api(path, method = "GET", body) {
+    console.log(method, API_BASE_URL + path);
+    const res = await fetch(API_BASE_URL + path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || res.status);
+    return text ? JSON.parse(text) : null;
+  }
+
+  function setStatus(msg) {
+    elStatus.textContent = msg || "";
+  }
+
+  function setListStatus(msg) {
+    elListStatus.textContent = msg || "";
+  }
+
+  // ===================== CRUD =======================
+  async function loadNotes() {
+    setBusy(true);
+    setListStatus("Loading...");
+    try {
+      const res = await api("/notes");
+      notes = res.items || [];
+      renderNotes();
+      setListStatus(`Loaded ${notes.length} note(s)`);
+    } catch (e) {
+      setListStatus("Error loading notes: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadNote(id) {
+    setBusy(true);
+    setStatus("Loading note...");
+    try {
+      const n = await api(`/notes/${id}`);
+      elTitle.value = n.title || "";
+      elNote.value  = n.note || "";
+      selectedId = id;
+      renderNotes();
+      setStatus("Loaded note");
+    } catch (e) {
+      setStatus("Error loading note: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveNote() {
+    const title = elTitle.value.trim();
+    const note  = elNote.value || "";
+
+    if (!title) {
+      setStatus("Title is required");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      if (selectedId) {
+        await api(`/notes/${selectedId}`, "PUT", { title, note });
+        setStatus("Updated note");
+      } else {
+        const res = await api("/notes", "POST", { title, note });
+        selectedId = res.id;
+        setStatus("Created note");
+      }
+      await loadNotes();
+    } catch (e) {
+      setStatus("Error saving note: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteNote() {
+    if (!selectedId) {
+      setStatus("Select a note to delete");
+      return;
+    }
+
+    if (!confirm("Delete this note?")) return;
+
+    setBusy(true);
+    try {
+      await api(`/notes/${selectedId}`, "DELETE");
+      selectedId = null;
+      elTitle.value = "";
+      elNote.value  = "";
+      await loadNotes();
+      setStatus("Deleted note");
+    } catch (e) {
+      setStatus("Error deleting note: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renderNotes() {
+    elNotes.innerHTML = "";
+    notes.forEach(n => {
+      const d = document.createElement("div");
+      d.className = "note" + (n.id === selectedId ? " active" : "");
+      d.textContent = n.title || "(untitled)";
+      d.addEventListener("click", () => loadNote(n.id));
+      elNotes.appendChild(d);
+    });
+
+    if (notes.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "status";
+      empty.textContent = "No notes yet. Click New to create one.";
+      elNotes.appendChild(empty);
+    }
+  }
+
+  // ===================== Modal ======================
+  function openModal() {
+    modalTitle.value = "";
+    modalNote.value = "";
+    modalStatus.textContent = "";
+    modal.style.display = "flex";
+    setTimeout(() => modalTitle.focus(), 0);
+  }
+
+  function closeModal() {
+    modal.style.display = "none";
+  }
+
+  async function createFromModal() {
+    const title = modalTitle.value.trim();
+    const note  = modalNote.value || "";
+
+    if (!title) {
+      modalStatus.textContent = "Title is required";
+      return;
+    }
+
+    setBusy(true);
+    modalStatus.textContent = "Creating...";
+    try {
+      const res = await api("/notes", "POST", { title, note });
+      selectedId = res.id;
+
+      // Reuse main editor panel
+      elTitle.value = title;
+      elNote.value  = note;
+
+      closeModal();
+      await loadNotes();
+      setStatus("Created note");
+    } catch (e) {
+      modalStatus.textContent = "Error creating note: " + e.message;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Close modal by clicking backdrop
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  // Esc closes modal
+  document.addEventListener("keydown", (e) => {
+    if (modal.style.display === "flex" && e.key === "Escape") {
+      closeModal();
+    }
+  });
+
+  // ===================== Wiring =====================
+  document.getElementById("btnRefresh").addEventListener("click", loadNotes);
+  document.getElementById("btnNew").addEventListener("click", openModal);
+  document.getElementById("btnSave").addEventListener("click", saveNote);
+  document.getElementById("btnDelete").addEventListener("click", deleteNote);
+
+  document.getElementById("btnModalCancel").addEventListener("click", closeModal);
+  document.getElementById("btnModalCreate").addEventListener("click", createFromModal);
+
+  // ===================== Cold-start probe ===========
+  // Once a minute, quietly time a GET /notes round-trip. Runs silently — no
+  // busy overlay, no re-render — so it never disturbs the demo. Each result is
+  // logged and stashed on window.__probes for later inspection/export.
+  const elProbe = document.getElementById("probe");
+  window.__probes = [];
+  let probeCount = 0;
+
+  async function probeNotes() {
+    const started = performance.now();
+    const stamp   = new Date().toLocaleTimeString();
+    try {
+      // Drain the body so the timing is a true end-to-end round-trip.
+      const res = await fetch(API_BASE_URL + "/notes", { cache: "no-store" });
+      await res.text();
+      const ms  = Math.round(performance.now() - started);
+      probeCount++;
+      window.__probes.push({ n: probeCount, at: stamp, ms, status: res.status });
+      console.log(`probe #${probeCount} ${stamp}  GET /notes  ${res.status}  ${ms} ms`);
+      if (elProbe) elProbe.textContent = `probe #${probeCount} · ${ms} ms · ${stamp}`;
+    } catch (e) {
+      const ms = Math.round(performance.now() - started);
+      console.log(`probe #${probeCount + 1} ${stamp}  GET /notes  FAILED  ${ms} ms  ${e.message}`);
+      if (elProbe) elProbe.textContent = `probe · error · ${stamp}`;
+    }
+  }
+
+  // ===================== Init =======================
+  loadNotes();
+  setInterval(probeNotes, PROBE_INTERVAL_MS);
+</script>
+
+</body>
+</html>
