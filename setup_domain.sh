@@ -70,7 +70,7 @@ else
     --description "Self-service registration domain for the Notes SPA" \
     --home-region "${REGION}" \
     --license-type "${LICENSE_TYPE}" \
-    --wait-for-state ACTIVE \
+    --wait-for-state SUCCEEDED \
     --max-wait-seconds 1800 \
     < /dev/null
 
