@@ -18,13 +18,15 @@
 #   calls are rejected at the gateway before any function runs.
 #
 # Per-user isolation:
-#   The gateway injects the validated `sub` claim as the X-User-Sub header
-#   (${request.auth[sub]}); func.py reads it and uses it as the NoSQL shard key,
-#   so each user only ever sees their own notes.
+#   The gateway forwards the (now-verified) Authorization header to the function,
+#   which decodes the token's `sub` claim and uses it as the NoSQL shard key, so
+#   each user only ever sees their own notes.  We deliberately do NOT inject
+#   ${request.auth[sub]} as a header — that expression fails to resolve under
+#   JWT_AUTHENTICATION and 500s the request before it reaches the function.
 #
 # Path parameters:
-#   For routes containing {id}, a header transformation also injects
-#   ${request.path[id]} as X-Note-Id.  Such routes therefore set TWO headers.
+#   For routes containing {id}, a header transformation injects
+#   ${request.path[id]} as X-Note-Id (a proven expression).
 # ================================================================================
 
 # --------------------------------------------------------------------------------
@@ -105,15 +107,6 @@ resource "oci_apigateway_deployment" "notes" {
         authorization {
           type = "AUTHENTICATION_ONLY"
         }
-        header_transformations {
-          set_headers {
-            items {
-              name      = "X-User-Sub"
-              values    = ["$${request.auth[sub]}"]
-              if_exists = "OVERWRITE"
-            }
-          }
-        }
       }
     }
 
@@ -133,22 +126,13 @@ resource "oci_apigateway_deployment" "notes" {
         authorization {
           type = "AUTHENTICATION_ONLY"
         }
-        header_transformations {
-          set_headers {
-            items {
-              name      = "X-User-Sub"
-              values    = ["$${request.auth[sub]}"]
-              if_exists = "OVERWRITE"
-            }
-          }
-        }
       }
     }
 
     # ------------------------------------------------------------------
     # GET /notes/{id} — retrieve a single note
     # ------------------------------------------------------------------
-    # Two injected headers: X-User-Sub (owner) and X-Note-Id (path param).
+    # Injects X-Note-Id (path param); owner comes from the forwarded token.
     # ------------------------------------------------------------------
     routes {
       path    = "/notes/{id}"
@@ -165,11 +149,6 @@ resource "oci_apigateway_deployment" "notes" {
         }
         header_transformations {
           set_headers {
-            items {
-              name      = "X-User-Sub"
-              values    = ["$${request.auth[sub]}"]
-              if_exists = "OVERWRITE"
-            }
             items {
               name      = "X-Note-Id"
               values    = ["$${request.path[id]}"]
@@ -199,11 +178,6 @@ resource "oci_apigateway_deployment" "notes" {
         header_transformations {
           set_headers {
             items {
-              name      = "X-User-Sub"
-              values    = ["$${request.auth[sub]}"]
-              if_exists = "OVERWRITE"
-            }
-            items {
               name      = "X-Note-Id"
               values    = ["$${request.path[id]}"]
               if_exists = "OVERWRITE"
@@ -231,11 +205,6 @@ resource "oci_apigateway_deployment" "notes" {
         }
         header_transformations {
           set_headers {
-            items {
-              name      = "X-User-Sub"
-              values    = ["$${request.auth[sub]}"]
-              if_exists = "OVERWRITE"
-            }
             items {
               name      = "X-Note-Id"
               values    = ["$${request.path[id]}"]
