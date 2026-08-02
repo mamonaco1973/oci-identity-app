@@ -159,7 +159,7 @@ if [ -z "${PROFILE_ID}" ] || [ "${PROFILE_ID}" = "null" ]; then
   "showOnLoginPage": true,
   "numberOfDaysRedirectUrlIsValid": 7,
   "redirectUrl": "${ENDPOINT}/ui/v1/signin",
-  "active": true,
+  "active": false,
   "userAttributes": [
     {"value":"name.givenName","seqNumber":1},
     {"value":"name.familyName","seqNumber":2},
