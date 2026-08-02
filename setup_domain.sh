@@ -33,6 +33,9 @@ DOMAIN_NAME="${OCI_DOMAIN_NAME:-notes-app}"
 PROFILE_NAME="${OCI_SIGNUP_PROFILE_NAME:-spa-signup}"
 LICENSE_TYPE="${OCI_LICENSE_TYPE:-external-user}"
 SIGNUP_LINK_TEXT="Create an account"
+# Built-in IDCS self-registration activation template — present in every domain,
+# so it needs no lookup. (Not actually sent, since activation email is off.)
+EMAIL_TEMPLATE="${OCI_EMAIL_TEMPLATE:-MeRegisterActivationEmail}"
 
 # ------------------------------------------------------------------------------
 # Derive OCI identifiers from ~/.oci/config
@@ -142,14 +145,14 @@ PROFILE_ID="$(find_profile_id)"
 if [ -z "${PROFILE_ID}" ] || [ "${PROFILE_ID}" = "null" ]; then
   echo "NOTE: Creating self-registration profile '${PROFILE_NAME}' via SCIM API..."
 
-  # Ground truth from a console-created profile: emailTemplate is null, but the
-  # SCIM POST requires the attribute to be PRESENT — omitting it 400s with
-  # "Missing required attribute(s): emailTemplate". So send it explicitly as null.
+  # The SCIM POST requires a real emailTemplate reference (the console sends one;
+  # its GET representation just shows null). MeRegisterActivationEmail is the
+  # built-in self-registration template present in every domain.
   PROFILE_BODY=$(cat <<JSON
 {
   "schemas": ["urn:ietf:params:scim:schemas:oracle:idcs:SelfRegistrationProfile"],
   "name": "${PROFILE_NAME}",
-  "emailTemplate": null,
+  "emailTemplate": {"value": "${EMAIL_TEMPLATE}"},
   "displayName": [{"value":"${SIGNUP_LINK_TEXT}","locale":"en-US","default":true}],
   "activationEmailRequired": false,
   "consentTextPresent": false,
