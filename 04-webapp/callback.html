@@ -68,7 +68,8 @@ function fail(msg) {
 (async function main() {
   try {
     // Runtime config written by apply.sh (Identity Domains client + endpoints).
-    const cfgRes = await fetch("/config.json", { cache: "no-store" });
+    // Relative path — the page is served under a long /o/ prefix, not the root.
+    const cfgRes = await fetch("config.json", { cache: "no-store" });
     if (!cfgRes.ok) fail("Unable to load /config.json (" + cfgRes.status + ")");
     const cfg = await cfgRes.json();
 

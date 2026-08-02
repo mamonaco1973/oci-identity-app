@@ -242,7 +242,9 @@
   let AUTH = null;
 
   async function loadAuthConfig() {
-    const res = await fetch("/config.json", { cache: "no-store" });
+    // Relative path — OCI Object Storage serves this page under a long
+    // /n/{ns}/b/{bucket}/o/ prefix, so an absolute "/config.json" would 404.
+    const res = await fetch("config.json", { cache: "no-store" });
     if (!res.ok) throw new Error("Failed to load /config.json (" + res.status + ")");
     AUTH = await res.json();
     if (!AUTH.domainUrl || !AUTH.clientId || !AUTH.redirectUri) {
