@@ -9,6 +9,9 @@
 index.html
 config.json
 
+# Local environment overrides (OCI_DOMAIN_NAME, OCI_SIGNUP_PROFILE_NAME, etc.)
+env.sh
+
 
 # Python bytecode
 __pycache__/

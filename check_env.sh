@@ -14,6 +14,11 @@
 
 set -euo pipefail
 
+# Load local, uncommitted overrides (OCI_DOMAIN_NAME, OCI_SIGNUP_PROFILE_NAME,
+# OCI_COMPARTMENT_ID, etc.) if an env.sh is present. Gitignored. This also lets
+# check_env.sh validate the right domain when run standalone.
+if [ -f env.sh ]; then source env.sh; fi
+
 # ------------------------------------------------------------------------------
 # Tool checks
 # ------------------------------------------------------------------------------
