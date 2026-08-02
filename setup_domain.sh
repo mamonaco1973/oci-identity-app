@@ -33,9 +33,10 @@ DOMAIN_NAME="${OCI_DOMAIN_NAME:-notes-app}"
 PROFILE_NAME="${OCI_SIGNUP_PROFILE_NAME:-spa-signup}"
 LICENSE_TYPE="${OCI_LICENSE_TYPE:-external-user}"
 SIGNUP_LINK_TEXT="Create an account"
-# Built-in IDCS self-registration activation template — present in every domain,
-# so it needs no lookup. (Not actually sent, since activation email is off.)
-EMAIL_TEMPLATE="${OCI_EMAIL_TEMPLATE:-MeRegisterActivationEmail}"
+# Built-in IDCS template whose eventId is admin.me.register.success — the one a
+# self-registration profile requires. (Its id reads "VerifyEmail"; Oracle's
+# naming is confusing.) Built in to every domain, so no lookup needed.
+EMAIL_TEMPLATE="${OCI_EMAIL_TEMPLATE:-MeRegisterVerifyEmail}"
 
 # ------------------------------------------------------------------------------
 # Derive OCI identifiers from ~/.oci/config
@@ -145,9 +146,9 @@ PROFILE_ID="$(find_profile_id)"
 if [ -z "${PROFILE_ID}" ] || [ "${PROFILE_ID}" = "null" ]; then
   echo "NOTE: Creating self-registration profile '${PROFILE_NAME}' via SCIM API..."
 
-  # The SCIM POST requires a real emailTemplate reference (the console sends one;
-  # its GET representation just shows null). MeRegisterActivationEmail is the
-  # built-in self-registration template present in every domain.
+  # The SCIM POST requires a real emailTemplate whose eventId is
+  # admin.me.register.success (built-in template MeRegisterVerifyEmail). The
+  # console sends it too; its GET representation just shows null.
   PROFILE_BODY=$(cat <<JSON
 {
   "schemas": ["urn:ietf:params:scim:schemas:oracle:idcs:SelfRegistrationProfile"],
