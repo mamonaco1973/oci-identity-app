@@ -142,25 +142,14 @@ PROFILE_ID="$(find_profile_id)"
 if [ -z "${PROFILE_ID}" ] || [ "${PROFILE_ID}" = "null" ]; then
   echo "NOTE: Creating self-registration profile '${PROFILE_NAME}' via SCIM API..."
 
-  # The API requires emailTemplate. There's no email-templates CLI command, so
-  # read one template ID off the SCIM API. IMPORTANT: request a TINY response
-  # (attributes=id&count=1) — the full list is chunked and comes back data:null,
-  # but a small response has a Content-Length that raw-request can parse.
-  EMAIL_TEMPLATE_ID=$(oci raw-request --http-method GET \
-    --target-uri "${ENDPOINT}/admin/v1/EmailTemplates?count=1&attributes=id" \
-    --query 'data.Resources[0].id' --raw-output 2>/dev/null || echo "")
-  echo "NOTE: Email template  - ${EMAIL_TEMPLATE_ID:-<none resolved>}"
-
-  ET_JSON=""
-  if [ -n "${EMAIL_TEMPLATE_ID}" ] && [ "${EMAIL_TEMPLATE_ID}" != "null" ]; then
-    ET_JSON="\"emailTemplate\": {\"value\": \"${EMAIL_TEMPLATE_ID}\"},"
-  fi
-
+  # Ground truth from a console-created profile: emailTemplate is null, but the
+  # SCIM POST requires the attribute to be PRESENT — omitting it 400s with
+  # "Missing required attribute(s): emailTemplate". So send it explicitly as null.
   PROFILE_BODY=$(cat <<JSON
 {
   "schemas": ["urn:ietf:params:scim:schemas:oracle:idcs:SelfRegistrationProfile"],
   "name": "${PROFILE_NAME}",
-  ${ET_JSON}
+  "emailTemplate": null,
   "displayName": [{"value":"${SIGNUP_LINK_TEXT}","locale":"en-US","default":true}],
   "activationEmailRequired": false,
   "consentTextPresent": false,
