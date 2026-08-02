@@ -30,6 +30,8 @@ if [ -f env.sh ]; then source env.sh; fi
 
 echo "NOTE: Running environment validation..."
 ./check_env.sh
+echo "NOTE: Validating the authentication domain."
+./setup_domain.sh
 
 # ------------------------------------------------------------------------------
 # Derive OCI identifiers from ~/.oci/config
