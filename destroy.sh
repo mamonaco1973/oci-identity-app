@@ -83,13 +83,13 @@ DOMAIN_URL=$(cd 03-functions && terraform output -raw identity_domain_url 2>/dev
 
 if [[ -n "${APP_ID}" && -n "${DOMAIN_URL}" ]]; then
   echo "NOTE: Deactivating Identity Domains app ${APP_ID}..."
-  oci identity-domains app-status-changer put \
+  # No --force on this subcommand; pipe 'y' to auto-confirm the prompt.
+  echo y | oci identity-domains app-status-changer put \
     --endpoint "${DOMAIN_URL}" \
     --app-status-changer-id "${APP_ID}" \
     --active false \
     --schemas '["urn:ietf:params:scim:schemas:oracle:idcs:AppStatusChanger"]' \
-    --force \
-    < /dev/null 2>/dev/null \
+    2>/dev/null \
     || echo "NOTE: CLI deactivate failed — if destroy errors, deactivate 'notes-spa' in the console."
 fi
 

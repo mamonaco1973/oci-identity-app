@@ -98,12 +98,13 @@ echo "NOTE: Domain URL  - ${ENDPOINT}"
 # settings -> "Configure client access" toggle.
 # ------------------------------------------------------------------------------
 echo "NOTE: Enabling Access Signing Certificate (public JWKS)..."
-oci identity-domains setting patch \
+# These identity-domains subcommands have no --force; pipe 'y' to auto-confirm
+# any interactive prompt (harmless when there isn't one).
+echo y | oci identity-domains setting patch \
   --endpoint "${ENDPOINT}" \
   --setting-id "Settings" \
   --schemas '["urn:ietf:params:scim:api:messages:2.0:PatchOp"]' \
   --operations '[{"op":"replace","path":"signingCertPublicAccess","value":true}]' \
-  --force < /dev/null \
   || echo "WARN: Could not set signingCertPublicAccess — enable it in the console if calls 500."
 
 # ------------------------------------------------------------------------------
@@ -124,7 +125,7 @@ else
   echo "NOTE: Creating self-registration profile '${PROFILE_NAME}'..."
   # Immediate sign-in (activation-email-required=false), no consent step, and the
   # default consumer attribute set (first/last/email/username/password).
-  oci identity-domains self-registration-profile create \
+  echo y | oci identity-domains self-registration-profile create \
     --endpoint "${ENDPOINT}" \
     --schemas '["urn:ietf:params:scim:schemas:oracle:idcs:SelfRegistrationProfile"]' \
     --name "${PROFILE_NAME}" \
@@ -142,8 +143,7 @@ else
       {"value":"emails.primary","seqNumber":5},
       {"value":"userName","seqNumber":6},
       {"value":"password","seqNumber":7}
-    ]' \
-    --force < /dev/null
+    ]'
 
   PROFILE_ID="$(find_profile_id)"
 fi
@@ -151,12 +151,11 @@ fi
 # Ensure it is ACTIVE and shown on the login page (idempotent belt-and-suspenders).
 if [ -n "${PROFILE_ID}" ] && [ "${PROFILE_ID}" != "null" ]; then
   echo "NOTE: Activating profile ${PROFILE_ID}..."
-  oci identity-domains self-registration-profile patch \
+  echo y | oci identity-domains self-registration-profile patch \
     --endpoint "${ENDPOINT}" \
     --self-registration-profile-id "${PROFILE_ID}" \
     --schemas '["urn:ietf:params:scim:api:messages:2.0:PatchOp"]' \
     --operations '[{"op":"replace","path":"active","value":true},{"op":"replace","path":"showOnLoginPage","value":true}]' \
-    --force < /dev/null \
     || echo "WARN: Could not patch profile active/showOnLoginPage — activate it in the console."
 else
   echo "WARN: Self-registration profile not found after create — 'Create Account' will be hidden."
