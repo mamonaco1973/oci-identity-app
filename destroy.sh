@@ -84,7 +84,8 @@ if [[ -n "${APP_ID}" && -n "${DOMAIN_URL}" ]]; then
     --app-status-changer-id "${APP_ID}" \
     --active false \
     --schemas '["urn:ietf:params:scim:schemas:oracle:idcs:AppStatusChanger"]' \
-    2>/dev/null \
+    --force \
+    < /dev/null 2>/dev/null \
     || echo "NOTE: CLI deactivate failed — if destroy errors, deactivate 'notes-spa' in the console."
 fi
 
