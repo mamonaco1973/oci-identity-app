@@ -56,6 +56,28 @@ cd ..
 
 echo "NOTE: [Phase 3/4] Destroying Functions, NoSQL, and API Gateway..."
 
+# ------------------------------------------------------------------------------
+# Deactivate the Identity Domains app before destroy
+# ------------------------------------------------------------------------------
+# Identity Domains rejects DeleteApp on an ACTIVE app with a generic 400, so
+# terraform destroy fails on oci_identity_domains_app.  Flip it inactive first
+# via the domain SCIM API (AppStatusChanger).  Best-effort: if this fails,
+# deactivate "notes-spa" in the console, then re-run destroy.
+# ------------------------------------------------------------------------------
+APP_ID=$(cd 03-functions && terraform output -raw spa_app_id 2>/dev/null || echo "")
+DOMAIN_URL=$(cd 03-functions && terraform output -raw identity_domain_url 2>/dev/null || echo "")
+
+if [[ -n "${APP_ID}" && -n "${DOMAIN_URL}" ]]; then
+  echo "NOTE: Deactivating Identity Domains app ${APP_ID}..."
+  oci identity-domains app-status-changer put \
+    --endpoint "${DOMAIN_URL}" \
+    --app-status-changer-id "${APP_ID}" \
+    --active false \
+    --schemas '["urn:ietf:params:scim:schemas:oracle:idcs:AppStatusChanger"]' \
+    2>/dev/null \
+    || echo "NOTE: CLI deactivate failed — if destroy errors, deactivate 'notes-spa' in the console."
+fi
+
 cd 03-functions || { echo "ERROR: 03-functions directory missing."; exit 1; }
 terraform init
 # Retry once — OCI IAM ETag optimistic locking causes spurious 412 failures

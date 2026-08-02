@@ -40,6 +40,13 @@ output "spa_client_id" {
   value       = oci_identity_domains_app.spa.name
 }
 
+# The OCID (not the client_id) — needed to deactivate the app before destroy,
+# since Identity Domains rejects DeleteApp on an active app with a 400.
+output "spa_app_id" {
+  description = "OCID of the Identity Domains SPA app"
+  value       = oci_identity_domains_app.spa.id
+}
+
 output "identity_domain_url" {
   description = "Identity domain base URL (authorize/token/JWKS live under this)"
   value       = data.oci_identity_domain.target.url
