@@ -125,16 +125,17 @@ else
   echo "NOTE: Creating self-registration profile '${PROFILE_NAME}'..."
 
   # The CLI requires --email-template even though activation email is off (so it
-  # never actually sends). Reference any existing template in the domain: prefer
-  # a registration-related one, else fall back to the first available.
-  EMAIL_TEMPLATE_ID=$(oci identity-domains email-templates list \
-    --endpoint "${ENDPOINT}" \
-    --query "data.resources[?contains(id, 'egistration')].id | [0]" \
+  # never actually sends). There is no email-templates CLI command, so read the
+  # domain's templates straight off the SCIM API. Prefer a registration-related
+  # one, else fall back to the first available. (raw SCIM uses "Resources".)
+  EMAIL_TEMPLATE_ID=$(oci raw-request --http-method GET \
+    --target-uri "${ENDPOINT}/admin/v1/EmailTemplates?count=1000" \
+    --query "data.Resources[?contains(id, 'egistration')].id | [0]" \
     --raw-output 2>/dev/null || echo "")
   if [ -z "${EMAIL_TEMPLATE_ID}" ] || [ "${EMAIL_TEMPLATE_ID}" = "null" ]; then
-    EMAIL_TEMPLATE_ID=$(oci identity-domains email-templates list \
-      --endpoint "${ENDPOINT}" \
-      --query 'data.resources[0].id' --raw-output 2>/dev/null || echo "")
+    EMAIL_TEMPLATE_ID=$(oci raw-request --http-method GET \
+      --target-uri "${ENDPOINT}/admin/v1/EmailTemplates?count=1000" \
+      --query 'data.Resources[0].id' --raw-output 2>/dev/null || echo "")
   fi
   echo "NOTE: Using email template - ${EMAIL_TEMPLATE_ID:-<none found>}"
 
