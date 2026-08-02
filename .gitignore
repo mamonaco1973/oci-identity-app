@@ -7,6 +7,7 @@
 *.pub
 *.zip
 index.html
+config.json
 
 
 # Python bytecode

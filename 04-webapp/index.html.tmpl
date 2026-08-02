@@ -22,10 +22,7 @@
       border-bottom: 1px solid #1e293b;
     }
 
-    h1 {
-      margin: 0;
-      font-size: 18px;
-    }
+    h1 { margin: 0; font-size: 18px; }
 
     main {
       max-width: 1100px;
@@ -140,10 +137,7 @@
       z-index: 2000;
     }
 
-    .busy-overlay.active {
-      display: flex;
-      cursor: wait;
-    }
+    .busy-overlay.active { display: flex; cursor: wait; }
 
     .busy-box {
       padding: 16px 18px;
@@ -168,7 +162,13 @@
 <body>
 
 <header>
-  <h1>Notes Demo</h1>
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+    <h1>Notes Demo</h1>
+    <div style="display:flex; gap:8px;">
+      <button id="btnLogin" class="secondary">Sign in</button>
+      <button id="btnLogout" class="secondary" style="display:none;">Sign out</button>
+    </div>
+  </div>
 </header>
 
 <main>
@@ -234,9 +234,124 @@
   // ===================== Config =====================
   const API_BASE_URL = "${API_BASE}";
 
-  // Background probe cadence — GET /notes once a minute to keep a Function
-  // warm and measure whether that interval is enough to dodge cold starts.
+  // Background probe cadence — GET /notes once a minute to keep a Function warm
+  // and measure whether that interval is enough to dodge cold starts.
   const PROBE_INTERVAL_MS = 60000;
+
+  // Identity Domains runtime config loaded from /config.json.
+  let AUTH = null;
+
+  async function loadAuthConfig() {
+    const res = await fetch("/config.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("Failed to load /config.json (" + res.status + ")");
+    AUTH = await res.json();
+    if (!AUTH.domainUrl || !AUTH.clientId || !AUTH.redirectUri) {
+      throw new Error("config.json missing domainUrl/clientId/redirectUri");
+    }
+  }
+
+  // ===================== Auth State =====================
+  // The ID token is the credential sent to the API Gateway (aud = client_id).
+  function isAuthenticated() {
+    return !!sessionStorage.getItem("id_token");
+  }
+
+  function updateAuthButtons() {
+    const loggedIn = isAuthenticated();
+    document.getElementById("btnLogin").style.display  = loggedIn ? "none" : "inline-block";
+    document.getElementById("btnLogout").style.display = loggedIn ? "inline-block" : "none";
+  }
+
+  function setUiEnabled(enabled) {
+    const selectors = [
+      "#btnRefresh", "#btnNew", "#btnSave", "#btnDelete",
+      "#title", "#note",
+      "#modalTitle", "#modalNote",
+      "#btnModalCancel", "#btnModalCreate"
+    ];
+    selectors.forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) el.disabled = !enabled;
+    });
+    document.getElementById("notes").style.pointerEvents = enabled ? "auto" : "none";
+    document.getElementById("notes").style.opacity = enabled ? "1" : "0.6";
+  }
+
+  // ===================== OAuth / PKCE =====================
+  function base64UrlEncode(bytes) {
+    let bin = "";
+    const arr = new Uint8Array(bytes);
+    for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  async function sha256(str) {
+    const enc  = new TextEncoder().encode(str);
+    const hash = await crypto.subtle.digest("SHA-256", enc);
+    return new Uint8Array(hash);
+  }
+
+  function randomString(len = 64) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    const bytes = new Uint8Array(len);
+    crypto.getRandomValues(bytes);
+    let out = "";
+    for (let i = 0; i < bytes.length; i++) out += chars[bytes[i] % chars.length];
+    return out;
+  }
+
+  function authBase() {
+    return AUTH.domainUrl.replace(/\/$/, "");
+  }
+
+  async function startLogin() {
+    if (!AUTH) { setListStatus("Auth config not loaded yet."); return; }
+
+    // PKCE: verifier + challenge, plus state for CSRF protection.
+    const verifier  = randomString(64);
+    const challenge = base64UrlEncode(await sha256(verifier));
+    const state     = randomString(24);
+
+    sessionStorage.setItem("pkce_code_verifier", verifier);
+    sessionStorage.setItem("oauth_state", state);
+
+    // Identity Domains authorize endpoint (/oauth2/v1/authorize).
+    const authorizeUrl =
+      authBase() + "/oauth2/v1/authorize" +
+      "?client_id=" + encodeURIComponent(AUTH.clientId) +
+      "&response_type=code" +
+      "&scope=" + encodeURIComponent("openid profile email") +
+      "&redirect_uri=" + encodeURIComponent(AUTH.redirectUri) +
+      "&state=" + encodeURIComponent(state) +
+      "&code_challenge=" + encodeURIComponent(challenge) +
+      "&code_challenge_method=S256";
+
+    window.location.href = authorizeUrl;
+  }
+
+  function startLogout() {
+    if (!AUTH) { setListStatus("Auth config not loaded yet."); return; }
+
+    const idToken = sessionStorage.getItem("id_token");
+
+    // Clear local session first.
+    ["id_token", "access_token", "refresh_token", "expires_in",
+     "token_received_at", "pkce_code_verifier", "oauth_state"]
+      .forEach(k => sessionStorage.removeItem(k));
+
+    setUiEnabled(false);
+    updateAuthButtons();
+    setListStatus("Signed out.");
+
+    // Identity Domains logout endpoint (/oauth2/v1/userlogout).
+    const postLogout = window.location.origin + window.location.pathname;
+    const logoutUrl =
+      authBase() + "/oauth2/v1/userlogout" +
+      "?post_logout_redirect_uri=" + encodeURIComponent(postLogout) +
+      (idToken ? "&id_token_hint=" + encodeURIComponent(idToken) : "");
+
+    window.location.href = logoutUrl;
+  }
 
   // ===================== State ======================
   let notes = [];
@@ -265,9 +380,15 @@
   // ===================== Helpers ====================
   async function api(path, method = "GET", body) {
     console.log(method, API_BASE_URL + path);
+    const headers = { "Content-Type": "application/json" };
+
+    // Send the ID token; API Gateway validates it and injects X-User-Sub.
+    const token = sessionStorage.getItem("id_token");
+    if (token) headers["Authorization"] = "Bearer " + token;
+
     const res = await fetch(API_BASE_URL + path, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: body ? JSON.stringify(body) : undefined
     });
 
@@ -276,13 +397,8 @@
     return text ? JSON.parse(text) : null;
   }
 
-  function setStatus(msg) {
-    elStatus.textContent = msg || "";
-  }
-
-  function setListStatus(msg) {
-    elListStatus.textContent = msg || "";
-  }
+  function setStatus(msg)     { elStatus.textContent = msg || ""; }
+  function setListStatus(msg) { elListStatus.textContent = msg || ""; }
 
   // ===================== CRUD =======================
   async function loadNotes() {
@@ -320,11 +436,7 @@
   async function saveNote() {
     const title = elTitle.value.trim();
     const note  = elNote.value || "";
-
-    if (!title) {
-      setStatus("Title is required");
-      return;
-    }
+    if (!title) { setStatus("Title is required"); return; }
 
     setBusy(true);
     try {
@@ -345,11 +457,7 @@
   }
 
   async function deleteNote() {
-    if (!selectedId) {
-      setStatus("Select a note to delete");
-      return;
-    }
-
+    if (!selectedId) { setStatus("Select a note to delete"); return; }
     if (!confirm("Delete this note?")) return;
 
     setBusy(true);
@@ -380,7 +488,9 @@
     if (notes.length === 0) {
       const empty = document.createElement("div");
       empty.className = "status";
-      empty.textContent = "No notes yet. Click New to create one.";
+      empty.textContent = isAuthenticated()
+        ? "No notes yet. Click New to create one."
+        : "Please sign in to view notes.";
       elNotes.appendChild(empty);
     }
   }
@@ -394,29 +504,20 @@
     setTimeout(() => modalTitle.focus(), 0);
   }
 
-  function closeModal() {
-    modal.style.display = "none";
-  }
+  function closeModal() { modal.style.display = "none"; }
 
   async function createFromModal() {
     const title = modalTitle.value.trim();
     const note  = modalNote.value || "";
-
-    if (!title) {
-      modalStatus.textContent = "Title is required";
-      return;
-    }
+    if (!title) { modalStatus.textContent = "Title is required"; return; }
 
     setBusy(true);
     modalStatus.textContent = "Creating...";
     try {
       const res = await api("/notes", "POST", { title, note });
       selectedId = res.id;
-
-      // Reuse main editor panel
       elTitle.value = title;
       elNote.value  = note;
-
       closeModal();
       await loadNotes();
       setStatus("Created note");
@@ -427,43 +528,54 @@
     }
   }
 
-  // Close modal by clicking backdrop
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) closeModal();
-  });
-
-  // Esc closes modal
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
   document.addEventListener("keydown", (e) => {
-    if (modal.style.display === "flex" && e.key === "Escape") {
-      closeModal();
-    }
+    if (modal.style.display === "flex" && e.key === "Escape") closeModal();
   });
 
   // ===================== Wiring =====================
-  document.getElementById("btnRefresh").addEventListener("click", loadNotes);
-  document.getElementById("btnNew").addEventListener("click", openModal);
-  document.getElementById("btnSave").addEventListener("click", saveNote);
-  document.getElementById("btnDelete").addEventListener("click", deleteNote);
+  function requireAuth(fn, statusFn) {
+    return () => {
+      if (!isAuthenticated()) { (statusFn || setListStatus)("Please sign in to continue."); return; }
+      fn();
+    };
+  }
 
+  document.getElementById("btnRefresh").addEventListener("click", requireAuth(loadNotes));
+  document.getElementById("btnNew").addEventListener("click", requireAuth(openModal));
+  document.getElementById("btnSave").addEventListener("click", requireAuth(saveNote, setStatus));
+  document.getElementById("btnDelete").addEventListener("click", requireAuth(deleteNote, setStatus));
   document.getElementById("btnModalCancel").addEventListener("click", closeModal);
-  document.getElementById("btnModalCreate").addEventListener("click", createFromModal);
+  document.getElementById("btnModalCreate").addEventListener("click",
+    requireAuth(createFromModal, (m) => { modalStatus.textContent = m; }));
+
+  document.getElementById("btnLogin").addEventListener("click", () => {
+    setListStatus("Redirecting to sign-in...");
+    startLogin().catch(e => setListStatus("Login error: " + e.message));
+  });
+  document.getElementById("btnLogout").addEventListener("click", () => {
+    setListStatus("Signing out...");
+    startLogout();
+  });
 
   // ===================== Cold-start probe ===========
-  // Once a minute, quietly time a GET /notes round-trip. Runs silently — no
-  // busy overlay, no re-render — so it never disturbs the demo. Each result is
-  // logged and stashed on window.__probes for later inspection/export.
+  // Once a minute, quietly time a GET /notes round-trip (only while signed in).
+  // Silent — no busy overlay, no re-render — so it never disturbs the demo.
   const elProbe = document.getElementById("probe");
   window.__probes = [];
   let probeCount = 0;
 
   async function probeNotes() {
+    if (!isAuthenticated()) return; // authenticated endpoint; skip when logged out
     const started = performance.now();
     const stamp   = new Date().toLocaleTimeString();
     try {
-      // Drain the body so the timing is a true end-to-end round-trip.
-      const res = await fetch(API_BASE_URL + "/notes", { cache: "no-store" });
+      const res = await fetch(API_BASE_URL + "/notes", {
+        cache: "no-store",
+        headers: { "Authorization": "Bearer " + sessionStorage.getItem("id_token") }
+      });
       await res.text();
-      const ms  = Math.round(performance.now() - started);
+      const ms = Math.round(performance.now() - started);
       probeCount++;
       window.__probes.push({ n: probeCount, at: stamp, ms, status: res.status });
       console.log(`probe #${probeCount} ${stamp}  GET /notes  ${res.status}  ${ms} ms`);
@@ -476,8 +588,25 @@
   }
 
   // ===================== Init =======================
-  loadNotes();
-  setInterval(probeNotes, PROBE_INTERVAL_MS);
+  (async function init() {
+    // Lock everything by default until we confirm a session.
+    setUiEnabled(false);
+    setListStatus("Please sign in to continue.");
+    renderNotes();
+
+    try {
+      await loadAuthConfig();
+      updateAuthButtons();
+
+      if (!isAuthenticated()) return; // stay locked until sign-in
+
+      setUiEnabled(true);
+      await loadNotes();
+      setInterval(probeNotes, PROBE_INTERVAL_MS);
+    } catch (e) {
+      setListStatus("Auth init error: " + e.message);
+    }
+  })();
 </script>
 
 </body>

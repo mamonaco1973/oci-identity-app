@@ -19,13 +19,16 @@ Path parameters:
 
 Storage:
     OCI NoSQL Database with a composite primary key:
-        Shard key: owner  (string, always "global" — no auth in this demo)
+        Shard key: owner  (string, the authenticated user's `sub` claim)
         Sort key:  id     (string, UUID4)
 
 Authentication:
-    Resource Principal signer — credentials are derived automatically from
-    the Function's identity inside OCI.  No secrets in code.
-    A Dynamic Group + IAM policy grants NoSQL row management rights.
+    Two layers.  (1) API Gateway validates the caller's JWT against the identity
+    domain JWKS and injects the verified `sub` claim as the X-User-Sub header —
+    functions never see or parse the raw token, only the trusted header.  Each
+    user's notes are isolated because `sub` is the NoSQL shard key.  (2) The
+    function's own calls to NoSQL use a Resource Principal signer, so there are
+    no secrets in code; a Dynamic Group + IAM policy grants row-management rights.
 
 Environment variables:
     FUNCTION_TYPE       Routes to the correct handler (create/list/get/update/delete)
@@ -50,8 +53,6 @@ from oci.nosql.models import QueryDetails, UpdateRowDetails
 # ---------------------------------------------------------------------------
 # Module-level singletons
 # ---------------------------------------------------------------------------
-
-OWNER = "global"
 
 TABLE_NAME     = os.environ.get("NOSQL_TABLE_NAME", "notes").strip()
 COMPARTMENT_ID = os.environ.get("COMPARTMENT_ID", "").strip()
@@ -108,6 +109,53 @@ def _note_id(ctx) -> str:
         return str(val).strip()
     except Exception:
         return ""
+
+
+def _owner(ctx) -> str:
+    """Return the authenticated user id from the X-User-Sub header.
+
+    API Gateway validates the JWT and injects the verified `sub` claim as
+    X-User-Sub (see api.tf).  Its presence is the function's proof that the
+    request was authenticated, so a missing header is treated as unauthorized
+    rather than defaulted — there is no anonymous fallback.
+
+    Args:
+        ctx: FDK invoke context.
+
+    Returns:
+        str: The caller's `sub` claim, used as the NoSQL shard key.
+
+    Raises:
+        ValueError: If the header is absent (request was not authenticated).
+    """
+    try:
+        headers = ctx.Headers() or {}
+        val = headers.get("x-user-sub") or headers.get("X-User-Sub") or ""
+        # fdk-python may return header values as lists.
+        if isinstance(val, list):
+            val = val[0] if val else ""
+        owner = str(val).strip()
+    except Exception:
+        owner = ""
+    if not owner:
+        raise ValueError("Unauthorized: missing authenticated user")
+    return owner
+
+
+def _sql_literal(value: str) -> str:
+    """Escape a string for safe inclusion in a NoSQL SQL string literal.
+
+    The owner comes from a gateway-verified JWT claim, but it is still
+    interpolated into a SELECT, so single quotes are doubled to prevent a
+    malformed statement (defence in depth against query breakage).
+
+    Args:
+        value: Raw string to embed between single quotes.
+
+    Returns:
+        str: The escaped value (without surrounding quotes).
+    """
+    return value.replace("'", "''")
 
 
 def _row(value) -> dict:
@@ -170,8 +218,13 @@ def create_handler(ctx, data: io.BytesIO = None):
         data : HTTP request body (JSON bytes).
 
     Returns:
-        fdk.response.Response: 201 on success, 400 on bad input, 500 on error.
+        fdk.response.Response: 201 success, 400 bad input, 401 unauth, 500 error.
     """
+    try:
+        owner = _owner(ctx)
+    except ValueError as exc:
+        return _resp(ctx, 401, {"error": str(exc)})
+
     try:
         raw     = data.getvalue() if data else b"{}"
         payload = json.loads(raw or b"{}")
@@ -188,7 +241,7 @@ def create_handler(ctx, data: io.BytesIO = None):
     now     = datetime.now(timezone.utc).isoformat()
 
     item = {
-        "owner":      OWNER,
+        "owner":      owner,
         "id":         note_id,
         "title":      title,
         "note":       note,
@@ -223,13 +276,19 @@ def list_handler(ctx, data: io.BytesIO = None):
         data : HTTP request body (ignored).
 
     Returns:
-        fdk.response.Response: 200 with {"items": [...]}, 500 on error.
+        fdk.response.Response: 200 with {"items": [...]}, 401 unauth, 500 error.
     """
+    try:
+        owner = _owner(ctx)
+    except ValueError as exc:
+        return _resp(ctx, 401, {"error": str(exc)})
+
     try:
         resp = _nosql.query(
             query_details=QueryDetails(
                 statement=(
-                    f"SELECT * FROM {TABLE_NAME} WHERE owner = 'global'"
+                    f"SELECT * FROM {TABLE_NAME} "
+                    f"WHERE owner = '{_sql_literal(owner)}'"
                 ),
                 compartment_id=COMPARTMENT_ID,
             ),
@@ -252,8 +311,13 @@ def get_handler(ctx, data: io.BytesIO = None):
         data : HTTP request body (ignored).
 
     Returns:
-        fdk.response.Response: 200 with the item, 400/404/500 on error.
+        fdk.response.Response: 200 with the item, 400/401/404/500 on error.
     """
+    try:
+        owner = _owner(ctx)
+    except ValueError as exc:
+        return _resp(ctx, 401, {"error": str(exc)})
+
     note_id = _note_id(ctx)
     if not note_id:
         return _resp(ctx, 400, {"error": "Note id is required"})
@@ -261,7 +325,7 @@ def get_handler(ctx, data: io.BytesIO = None):
     try:
         resp = _nosql.get_row(
             table_name_or_id=TABLE_NAME,
-            key=[f"owner:{OWNER}", f"id:{note_id}"],
+            key=[f"owner:{owner}", f"id:{note_id}"],
             compartment_id=COMPARTMENT_ID,
         )
     except ServiceError:
@@ -287,8 +351,13 @@ def update_handler(ctx, data: io.BytesIO = None):
         data : HTTP request body with updated title/note (JSON bytes).
 
     Returns:
-        fdk.response.Response: 200 with updated item, 400/404/500 on error.
+        fdk.response.Response: 200 with updated item, 400/401/404/500 on error.
     """
+    try:
+        owner = _owner(ctx)
+    except ValueError as exc:
+        return _resp(ctx, 401, {"error": str(exc)})
+
     note_id = _note_id(ctx)
     if not note_id:
         return _resp(ctx, 400, {"error": "Note id is required"})
@@ -309,7 +378,7 @@ def update_handler(ctx, data: io.BytesIO = None):
     try:
         existing_resp = _nosql.get_row(
             table_name_or_id=TABLE_NAME,
-            key=[f"owner:{OWNER}", f"id:{note_id}"],
+            key=[f"owner:{owner}", f"id:{note_id}"],
             compartment_id=COMPARTMENT_ID,
         )
     except ServiceError:
@@ -321,7 +390,7 @@ def update_handler(ctx, data: io.BytesIO = None):
 
     now  = datetime.now(timezone.utc).isoformat()
     item = {
-        "owner":      OWNER,
+        "owner":      owner,
         "id":         note_id,
         "title":      title,
         "note":       note,
@@ -356,8 +425,13 @@ def delete_handler(ctx, data: io.BytesIO = None):
         data : HTTP request body (ignored).
 
     Returns:
-        fdk.response.Response: 200 on success, 400/404/500 on error.
+        fdk.response.Response: 200 on success, 400/401/404/500 on error.
     """
+    try:
+        owner = _owner(ctx)
+    except ValueError as exc:
+        return _resp(ctx, 401, {"error": str(exc)})
+
     note_id = _note_id(ctx)
     if not note_id:
         return _resp(ctx, 400, {"error": "Note id is required"})
@@ -365,7 +439,7 @@ def delete_handler(ctx, data: io.BytesIO = None):
     try:
         existing_resp = _nosql.get_row(
             table_name_or_id=TABLE_NAME,
-            key=[f"owner:{OWNER}", f"id:{note_id}"],
+            key=[f"owner:{owner}", f"id:{note_id}"],
             compartment_id=COMPARTMENT_ID,
         )
     except ServiceError:
@@ -377,7 +451,7 @@ def delete_handler(ctx, data: io.BytesIO = None):
     try:
         _nosql.delete_row(
             table_name_or_id=TABLE_NAME,
-            key=[f"owner:{OWNER}", f"id:{note_id}"],
+            key=[f"owner:{owner}", f"id:{note_id}"],
             compartment_id=COMPARTMENT_ID,
         )
     except ServiceError:

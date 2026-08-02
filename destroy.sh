@@ -40,9 +40,14 @@ export TF_VAR_region="$REGION"
 
 echo "NOTE: [Phase 4/4] Destroying web application..."
 
+# The bucket lives in the 03-functions state; Phase 4 only manages the uploaded
+# objects but its config still requires the bucket-name var to be set.  Read it
+# from the backend output (still present since Phase 3 is torn down after this).
+WEB_BUCKET=$(cd 03-functions && terraform output -raw web_bucket_name 2>/dev/null || echo "unknown")
+
 cd 04-webapp || { echo "ERROR: 04-webapp directory missing."; exit 1; }
 terraform init
-terraform destroy -auto-approve
+terraform destroy -auto-approve -var="web_bucket_name=${WEB_BUCKET}"
 cd ..
 
 # ------------------------------------------------------------------------------

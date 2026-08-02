@@ -59,8 +59,8 @@ resource "oci_core_security_list" "public" {
 
   # Allow HTTPS inbound — API Gateway needs port 443 open to serve traffic.
   ingress_security_rules {
-    protocol = "6" # TCP
-    source   = "0.0.0.0/0"
+    protocol  = "6" # TCP
+    source    = "0.0.0.0/0"
     stateless = false
 
     tcp_options {

@@ -1,5 +1,5 @@
 # ================================================================================
-# OCI API Gateway
+# OCI API Gateway (JWT-authenticated)
 # ================================================================================
 # Creates a public API Gateway and a deployment with five routes that map
 # HTTP methods + paths to the corresponding OCI Functions.
@@ -11,14 +11,20 @@
 #   PUT    /notes/{id}   → update-note
 #   DELETE /notes/{id}   → delete-note
 #
-# Path parameters:
-#   For routes containing {id}, a header transformation policy injects
-#   ${request.path[id]} as X-Note-Id before the function is invoked.
-#   The function reads ctx.Headers().get("x-note-id") to retrieve the value.
+# Authentication (the difference from oci-crud-example):
+#   A deployment-level authentication policy validates the JWT the SPA sends in
+#   the Authorization header against the identity domain's JWKS.  Every route
+#   opts in with an AUTHENTICATION_ONLY authorization policy, so unauthenticated
+#   calls are rejected at the gateway before any function runs.
 #
-# CORS:
-#   Configured at the deployment specification level so it applies to all
-#   routes.  The gateway handles OPTIONS preflight requests automatically.
+# Per-user isolation:
+#   The gateway injects the validated `sub` claim as the X-User-Sub header
+#   (${request.auth[sub]}); func.py reads it and uses it as the NoSQL shard key,
+#   so each user only ever sees their own notes.
+#
+# Path parameters:
+#   For routes containing {id}, a header transformation also injects
+#   ${request.path[id]} as X-Note-Id.  Such routes therefore set TWO headers.
 # ================================================================================
 
 # --------------------------------------------------------------------------------
@@ -32,7 +38,7 @@ resource "oci_apigateway_gateway" "notes" {
 }
 
 # --------------------------------------------------------------------------------
-# API Deployment — routes, CORS, and function backends
+# API Deployment — auth policy, routes, CORS, and function backends
 # --------------------------------------------------------------------------------
 resource "oci_apigateway_deployment" "notes" {
   compartment_id = var.compartment_id
@@ -42,15 +48,44 @@ resource "oci_apigateway_deployment" "notes" {
 
   specification {
 
-    # CORS — applies to all routes; gateway handles OPTIONS preflight automatically.
     request_policies {
+
+      # CORS — applies to all routes; gateway handles OPTIONS preflight itself.
       cors {
         allowed_origins              = ["*"]
         allowed_methods              = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-        allowed_headers              = ["Content-Type", "content-type"]
+        allowed_headers              = ["Content-Type", "content-type", "Authorization", "authorization"]
         exposed_headers              = ["Content-Type"]
         is_allow_credentials_enabled = false
         max_age_in_seconds           = 300
+      }
+
+      # --------------------------------------------------------------------------
+      # JWT authentication — validates the SPA's ID token against the domain JWKS
+      # --------------------------------------------------------------------------
+      # VERIFY BEFORE SHIP: `issuers` and `audiences` are config-dependent.
+      #   issuers  — decode a real token; Identity Domains usually emits
+      #              "https://identity.oraclecloud.com/" (trailing slash), but a
+      #              domain-specific issuer can be enabled. Match it exactly.
+      #   audiences — set to the app client_id because the SPA sends the ID token
+      #              (aud = client_id). If you switch to access tokens + a custom
+      #              API scope, change this to that scope's primary audience.
+      # --------------------------------------------------------------------------
+      authentication {
+        type                        = "JWT_AUTHENTICATION"
+        token_header                = "Authorization"
+        token_auth_scheme           = "Bearer"
+        is_anonymous_access_allowed = false
+
+        issuers   = ["https://identity.oraclecloud.com/"]
+        audiences = [oci_identity_domains_app.spa.name]
+
+        public_keys {
+          type                        = "REMOTE_JWKS"
+          uri                         = "${data.oci_identity_domain.target.url}/admin/v1/SigningCert/jwk"
+          is_ssl_verify_disabled      = false
+          max_cache_duration_in_hours = 1
+        }
       }
     }
 
@@ -65,10 +100,25 @@ resource "oci_apigateway_deployment" "notes" {
         type        = "ORACLE_FUNCTIONS_BACKEND"
         function_id = oci_functions_function.create_note.id
       }
+
+      request_policies {
+        authorization {
+          type = "AUTHENTICATION_ONLY"
+        }
+        header_transformations {
+          set_headers {
+            items {
+              name      = "X-User-Sub"
+              values    = ["$${request.auth[sub]}"]
+              if_exists = "OVERWRITE"
+            }
+          }
+        }
+      }
     }
 
     # ------------------------------------------------------------------
-    # GET /notes — list all notes
+    # GET /notes — list the caller's notes
     # ------------------------------------------------------------------
     routes {
       path    = "/notes"
@@ -78,13 +128,27 @@ resource "oci_apigateway_deployment" "notes" {
         type        = "ORACLE_FUNCTIONS_BACKEND"
         function_id = oci_functions_function.list_notes.id
       }
+
+      request_policies {
+        authorization {
+          type = "AUTHENTICATION_ONLY"
+        }
+        header_transformations {
+          set_headers {
+            items {
+              name      = "X-User-Sub"
+              values    = ["$${request.auth[sub]}"]
+              if_exists = "OVERWRITE"
+            }
+          }
+        }
+      }
     }
 
     # ------------------------------------------------------------------
     # GET /notes/{id} — retrieve a single note
     # ------------------------------------------------------------------
-    # Header transform injects the path parameter so the function
-    # can read it from ctx.Headers().get("x-note-id").
+    # Two injected headers: X-User-Sub (owner) and X-Note-Id (path param).
     # ------------------------------------------------------------------
     routes {
       path    = "/notes/{id}"
@@ -96,8 +160,16 @@ resource "oci_apigateway_deployment" "notes" {
       }
 
       request_policies {
+        authorization {
+          type = "AUTHENTICATION_ONLY"
+        }
         header_transformations {
           set_headers {
+            items {
+              name      = "X-User-Sub"
+              values    = ["$${request.auth[sub]}"]
+              if_exists = "OVERWRITE"
+            }
             items {
               name      = "X-Note-Id"
               values    = ["$${request.path[id]}"]
@@ -121,8 +193,16 @@ resource "oci_apigateway_deployment" "notes" {
       }
 
       request_policies {
+        authorization {
+          type = "AUTHENTICATION_ONLY"
+        }
         header_transformations {
           set_headers {
+            items {
+              name      = "X-User-Sub"
+              values    = ["$${request.auth[sub]}"]
+              if_exists = "OVERWRITE"
+            }
             items {
               name      = "X-Note-Id"
               values    = ["$${request.path[id]}"]
@@ -146,8 +226,16 @@ resource "oci_apigateway_deployment" "notes" {
       }
 
       request_policies {
+        authorization {
+          type = "AUTHENTICATION_ONLY"
+        }
         header_transformations {
           set_headers {
+            items {
+              name      = "X-User-Sub"
+              values    = ["$${request.auth[sub]}"]
+              if_exists = "OVERWRITE"
+            }
             items {
               name      = "X-Note-Id"
               values    = ["$${request.path[id]}"]

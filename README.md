@@ -1,18 +1,22 @@
-# OCI Serverless CRUD API
+# OCI Serverless CRUD API — Authenticated with IAM Identity Domains
 
 This project delivers a fully automated **serverless CRUD (Create, Read, Update,
 Delete) API** on OCI, built using **OCI API Gateway**, **OCI Functions**, and
-**OCI NoSQL Database**.
+**OCI NoSQL Database**, and secured with **OCI IAM Identity Domains** (OAuth2 /
+OIDC, Authorization Code + PKCE).
 
 It uses **Terraform** and **Python (oci SDK + fdk)** to provision and deploy a
 **stateless, REST-style backend** that exposes HTTP endpoints for managing simple
 “notes” data — all without running or managing any compute instances.
 
-This is the OCI port of **aws-crud-example**.
+This is the **authenticated** sibling of **oci-crud-example**, and the OCI analog
+of **aws-cognito-app** (which adds Cognito auth to aws-crud-example). API Gateway
+validates the caller's JWT against the identity domain's JWKS and passes the
+verified `sub` claim to the Functions, so **each user only sees their own notes**.
 
-For testing and demonstration purposes, a lightweight **HTML web frontend**
-interacts directly with the deployed API, allowing users to create, view, update,
-and delete notes from a browser.
+For testing and demonstration purposes, a lightweight **HTML web frontend** runs
+the browser PKCE login and then interacts with the deployed API, allowing signed-in
+users to create, view, update, and delete their notes.
 
 ![webapp](webapp.png)
 
@@ -51,8 +55,9 @@ These endpoints allow clients to create, list, retrieve, update, and delete
 notes stored in OCI NoSQL Database. All endpoints return JSON and work with both
 CLI and browser-based clients.
 
-> Note: In this simplified demo, the note `owner` is hardcoded to `"global"` in
-> the Function handlers.
+> Note: The note `owner` is the authenticated user's `sub` claim, injected by
+> API Gateway as the `X-User-Sub` header after it validates the JWT. All requests
+> require a valid `Authorization: Bearer <id_token>` header.
 
 ### API Endpoint Summary
 
@@ -73,12 +78,12 @@ CLI and browser-based clients.
 
 | Aspect | Behavior |
 |-----|--------|
-| Authentication | None (demo-only) |
+| Authentication | Required — Identity Domains JWT (`Authorization: Bearer <id_token>`) |
 | Content Type | `application/json` |
-| Owner Model | Hardcoded to `"global"` |
+| Owner Model | Per-user — the JWT `sub` claim (via `X-User-Sub` header) |
 | Response Format | JSON |
-| Clients | curl, browser, any HTTP client |
-| Error Handling | Standard HTTP status codes |
+| Clients | Browser SPA (PKCE), or curl with a bearer token |
+| Error Handling | Standard HTTP status codes (401 when the token is missing/invalid) |
 
 ---
 

@@ -1,207 +1,148 @@
-# CLAUDE.md — oci-crud-example
+# CLAUDE.md — oci-identity-app
 
-A serverless notes CRUD API on OCI. Five Functions handle one REST operation each,
-OCI NoSQL Database stores the data, API Gateway routes requests, and a static Object
-Storage site provides a browser UI. This is the OCI port of aws-crud-example.
+A serverless notes CRUD API on OCI, secured with **OCI IAM Identity Domains**
+(OAuth2 / OIDC, Authorization Code + PKCE). Five Functions handle one REST
+operation each, OCI NoSQL Database stores the data, API Gateway validates the
+caller's JWT and routes requests, and a static Object Storage site serves the
+SPA. This is the authenticated sibling of `oci-crud-example` — the OCI analog of
+`aws-cognito-app` (which adds Cognito auth to `aws-crud-example`).
+
+`oci-identity-app ≈ oci-crud-example + Identity Domains auth + per-user notes.`
 
 ---
 
 ## What This Project Does
 
-Clients hit an OCI API Gateway that routes each operation to a dedicated OCI Function.
-OCI NoSQL Database persists the notes. A static HTML frontend served from Object Storage
-makes API calls directly to the API Gateway endpoint.
+The browser runs a PKCE login against an Identity Domains app, gets an OIDC **ID
+token**, and sends it to API Gateway. The gateway validates the token signature
+against the domain's JWKS, then injects the verified `sub` claim as the
+`X-User-Sub` header before invoking a Function. Each Function uses `sub` as the
+NoSQL shard key, so users only ever see their own notes.
 
-**Base URL after deploy:**
-```
-https://{gateway-hostname}/
-```
-
-| Method | Path | Function | Operation |
-|--------|------|----------|-----------|
-| POST | `/notes` | create-note | Create note |
-| GET | `/notes` | list-notes | List all notes |
-| GET | `/notes/{id}` | get-note | Get single note |
-| PUT | `/notes/{id}` | update-note | Update note |
-| DELETE | `/notes/{id}` | delete-note | Delete note |
+| Method | Path | Function | Auth | Owner |
+|--------|------|----------|------|-------|
+| POST | `/notes` | create-note | JWT required | `sub` claim |
+| GET | `/notes` | list-notes | JWT required | `sub` claim |
+| GET | `/notes/{id}` | get-note | JWT required | `sub` claim |
+| PUT | `/notes/{id}` | update-note | JWT required | `sub` claim |
+| DELETE | `/notes/{id}` | delete-note | JWT required | `sub` claim |
 
 ---
 
 ## Architecture
 
 ```
-Browser / curl
-     │
-     ▼
-OCI API Gateway — notes-gateway (PUBLIC)
-     │  routes by method + path
-     ├── POST   /notes        → Function: create-note
-     ├── GET    /notes        → Function: list-notes
-     ├── GET    /notes/{id}   → Function: get-note     ← injects X-Note-Id header
-     ├── PUT    /notes/{id}   → Function: update-note  ← injects X-Note-Id header
-     └── DELETE /notes/{id}  → Function: delete-note  ← injects X-Note-Id header
-                │ (Resource Principal auth)
-                ▼
-          OCI NoSQL Table: notes
-          Shard key: owner (string, always "global")
-          Sort key:  id    (string, UUID4)
+Browser (SPA on Object Storage)
+   │  1. PKCE login  → Identity Domain /oauth2/v1/authorize
+   │  2. callback.html exchanges code → tokens at /oauth2/v1/token
+   │  3. stores id_token in sessionStorage
+   ▼
+API Gateway — notes-gateway (PUBLIC)
+   │  authentication: JWT_AUTHENTICATION (REMOTE_JWKS = domain /admin/v1/SigningCert/jwk)
+   │  each route: authorization = AUTHENTICATION_ONLY
+   │  injects  X-User-Sub = ${request.auth[sub]}   (+ X-Note-Id for {id} routes)
+   ▼
+OCI Functions (one image, FUNCTION_TYPE dispatch, Resource Principal auth)
+   ▼
+OCI NoSQL Table: notes   PK: SHARD(owner=sub) + id(UUID4)
 ```
 
-**One image, five functions:** All five OCI Functions share a single Docker image
-in OCIR.  A `FUNCTION_TYPE` environment variable (set per-function in Terraform)
-routes the FDK `handler()` entry point to the correct CRUD operation at runtime.
-
-**Path parameters:** OCI API Gateway does not automatically forward URL path
-parameters to function bodies.  For routes with `{id}`, the deployment spec
-injects `${request.path[id]}` as the `X-Note-Id` request header before invoking
-the function.  The function reads it from `ctx.Headers().get("x-note-id")`.
+**Token choice:** the SPA sends the **ID token** (its `aud` is the app
+client_id), so the gateway validates `audiences = [client_id]` with no custom
+resource-app/scope plumbing. A later iteration could switch to access tokens
+with a dedicated API scope.
 
 ---
 
 ## Repository Layout
 
 ```
-01-functions/
-  code/
-    func.py           All five CRUD handlers; dispatches via FUNCTION_TYPE env var
-    requirements.txt  fdk + oci Python packages
-    Dockerfile        fnproject/python:3.11 multi-stage build
-  main.tf             OCI provider, variables
-  network.tf          VCN, public subnet, internet gateway, security list
-  nosql.tf            OCI NoSQL table (owner shard key + id sort key)
-  registry.tf         OCIR repo; null_resource builds and pushes Docker image
-  functions.tf        Functions Application + 5 Function resources
-  api.tf              API Gateway + deployment (routes, CORS, header transforms)
-  iam.tf              Dynamic Group + policies for Functions→NoSQL and API GW→Functions
-  outputs.tf          api_gateway_endpoint, ocir_image_path
-02-webapp/
-  index.html.tmpl     Web UI template — API_BASE injected at deploy time
-  favicon.ico
-  main.tf             OCI provider, variables
-  storage.tf          Object Storage bucket (public) + object uploads
-check_env.sh          Pre-flight: verify tools, env vars, OCI CLI connection
-apply.sh              Full deployment (both phases + validation)
-destroy.sh            Teardown in reverse order; purges OCIR images first
-validate.sh           End-to-end CRUD smoke test via curl
+01-ocir/        OCIR container repository (Terraform)
+02-docker/      Docker image build + push (build.sh); code/func.py = all 5 handlers
+03-functions/   Backend Terraform:
+                  network.tf   VCN + public subnet + IGW + security list
+                  nosql.tf     NoSQL table (SHARD(owner) + id)
+                  functions.tf Functions Application + 5 Functions
+                  identity.tf  Identity Domains app (SPA, PKCE, no secret) + domain lookup
+                  api.tf       API Gateway + JWT auth + per-route authz + header inject
+                  storage.tf   Web bucket (here so identity.tf can register its callback)
+                  iam.tf       Dynamic Group + policies
+                  outputs.tf   api endpoint, bucket, client_id, domain url, website url
+04-webapp/      SPA upload only (bucket created in 03):
+                  index.html.tmpl  SPA + PKCE login/logout (API_BASE injected)
+                  callback.html    code→token exchange
+                  storage.tf       uploads index/config/callback/favicon to the bucket
+apply.sh / destroy.sh / check_env.sh / validate.sh
 ```
+
+Phases are numbered by directory: **01-ocir → 02-docker → 03-functions →
+04-webapp**. (Earlier docs referenced a 2-phase `01-functions`/`02-webapp`
+layout; the real layout is these four.)
+
+---
+
+## Key Differences From oci-crud-example
+
+1. **Identity Domains app** (`03-functions/identity.tf`) — public SPA client,
+   Auth Code + PKCE, no secret. Looks up the domain via `oci_identity_domains` /
+   `oci_identity_domain` data sources to get the `idcs_endpoint` (domain URL).
+2. **API Gateway JWT auth** (`03-functions/api.tf`) — deployment-level
+   `authentication { type = "JWT_AUTHENTICATION" ... }` with REMOTE_JWKS; every
+   route opts in with `authorization { type = "AUTHENTICATION_ONLY" }`.
+3. **Per-user owner** — `func.py` reads `X-User-Sub` (injected from
+   `${request.auth[sub]}`) instead of the hardcoded `"global"`. Missing header →
+   401. The list query filters on the caller's `sub` (single-quote escaped).
+4. **Web bucket moved to phase 3** — so the app's OAuth redirect URI can point
+   at the deterministic Object Storage callback URL. Phase 4 only uploads.
+5. **SPA auth** — `index.html.tmpl` gains sign-in/out + PKCE; `callback.html` +
+   generated `config.json` (domainUrl, clientId, redirectUri, apiBaseUrl).
 
 ---
 
 ## Prerequisites
 
 - `oci`, `terraform`, `docker`, `jq`, `envsubst` in PATH
-- OCI CLI configured (`~/.oci/config` with API key)
-- Docker daemon running (for local image build)
-- OCI Auth Token created in Console: **Identity → Users → Auth Tokens**
-
----
-
-## Setup
-
-No environment variables are required.  Everything is derived automatically.
-
-`apply.sh` reads `tenancy`, `region`, and `user` from `~/.oci/config`, fetches
-the Object Storage namespace via `oci os ns get`, and creates an OCIR auth token
-on the first run via `oci iam auth-token create`.  The token is cached at
-`~/.oci/ocir_token` (mode 600) and reused on all subsequent runs.
-
-```bash
-# Optional: target a specific compartment (defaults to tenancy root)
-export OCI_COMPARTMENT_ID="ocid1.compartment.oc1....."
-```
-
-If the cached token is lost or invalidated, delete `~/.oci/ocir_token` and
-re-run `apply.sh`.  OCI allows a maximum of 2 auth tokens per user — if
-creation fails, delete an old token in the Console under
-**Identity → Users → Auth Tokens**.
+- OCI CLI configured (`~/.oci/config`, API key)
+- The deploy principal needs **Identity Domain Administrator** on the target
+  domain (the `oci_identity_domains_app` resource uses the domain SCIM API)
+- An Identity Domains **user** to log in with during the manual test
 
 ---
 
 ## Deployment
 
 ```bash
-# Full deploy
-./apply.sh
-
-# Teardown
-./destroy.sh
-
-# Smoke test only (after deploy)
-./validate.sh
+./apply.sh      # 01-ocir → 02-docker → 03-functions → 04-webapp → validate
+./destroy.sh    # reverse; purges OCIR images; deletes cached OCIR token
+./validate.sh   # asserts unauthenticated calls are rejected; prints web URL
 ```
 
-`apply.sh` runs in two phases:
-1. **`check_env.sh`** → validates tools, env vars, OCI CLI credentials
-2. **`01-functions`** → `terraform apply` creates VCN, NoSQL, OCIR repo, builds + pushes
-   Docker image (via `null_resource`), creates Functions Application + 5 Functions,
-   creates API Gateway + deployment, creates Dynamic Group + IAM policies
-3. Reads `api_gateway_endpoint` from Terraform output, injects into `index.html.tmpl`
-   via `envsubst`
-4. **`02-webapp`** → `terraform apply` creates public Object Storage bucket, uploads
-   `index.html` and `favicon.ico`
-5. **`validate.sh`** → creates, lists, gets, updates, and deletes 5 test notes
+`apply.sh` reads Phase-3 outputs (API URL, bucket, client_id, domain URL),
+generates `index.html` (envsubst `${API_BASE}`) and `config.json`, then uploads
+via Phase 4 with `-var web_bucket_name=…`.
 
 ---
 
-## Terraform Modules
+## VERIFY BEFORE SHIP (config-dependent, can't be confirmed offline)
 
-### 01-functions
-- `oci_core_vcn` + `oci_core_subnet` + `oci_core_internet_gateway` — public VCN for Functions and API Gateway
-- `oci_nosql_table` `notes` — composite PK: SHARD(owner) + id
-- `oci_artifacts_container_repository` `notes-functions` — OCIR private repo
-- `null_resource` `build_push` — `docker build + login + push` on code changes (content-hash tag)
-- `oci_functions_application` `notes-app` — groups all functions under shared VCN subnet
-- Five `oci_functions_function` resources — same image, different `FUNCTION_TYPE` config
-- `oci_apigateway_gateway` `notes-gateway` — PUBLIC endpoint
-- `oci_apigateway_deployment` `notes-api` — 5 routes, CORS, path-param header injection
-- `oci_identity_dynamic_group` + two `oci_identity_policy` resources for IAM
+These are flagged in `api.tf` and must be checked against a real token:
 
-### 02-webapp
-- `oci_objectstorage_bucket` with `access_type = "ObjectRead"` — public web hosting
-- `oci_objectstorage_object` uploads `index.html` (generated) and `favicon.ico`
+- **`issuers`** — set to `https://identity.oraclecloud.com/` (trailing slash).
+  Some domains emit a domain-specific issuer; decode a live token's `iss` and
+  match exactly, or the gateway returns 401 on every call.
+- **`audiences`** — set to the app `client_id` because the SPA sends the ID
+  token. If you switch to access tokens, change this to the API scope audience.
+- **`oci_identity_domains_app` schema** — `allowed_grants`, `client_type =
+  "public"`, and `based_on_template { value = "CustomWebAppTemplateId" }` are
+  per the current provider; if `value` errors, try `well_known_id` instead.
 
 ---
 
-## Function Code
+## Modifying Function Code
 
-All five handlers are in `01-functions/code/func.py`.  A single `handler()` entry
-point dispatches based on `FUNCTION_TYPE`.  Each handler follows the same pattern:
+1. Edit `02-docker/code/func.py`.
+2. Re-run `./apply.sh` — `build.sh` content-hashes the source, producing a new
+   image tag that forces the Functions to update.
 
-- Read `FUNCTION_TYPE`, `NOSQL_TABLE_NAME`, `COMPARTMENT_ID` from environment
-- Use `oci.auth.signers.get_resource_principals_signer()` for auth (no secrets)
-- Instantiate `oci.nosql.NosqlClient` with the Resource Principal signer
-- For path-param routes: read note ID from `ctx.Headers().get("x-note-id")`
-- Perform OCI NoSQL operation (`put_row`, `get_row`, `delete_row`, `query`)
-- Return `fdk.response.Response` with JSON body
-
-**OCI NoSQL data model:**
-- Table: `notes`
-- Shard key: `owner` (always `"global"` — hardcoded, no auth)
-- Sort key: `id` (UUID4)
-- Fields: `owner`, `id`, `title`, `note`, `created_at`, `updated_at`
-
-**OCI NoSQL key format for get_row / delete_row:**
-```python
-key = [f"owner:{OWNER}", f"id:{note_id}"]  # fieldname:value pairs
-```
-
----
-
-## Test Manually
-
-```bash
-BASE=$(cd 01-functions && terraform output -raw api_gateway_endpoint)
-
-# Create
-curl -X POST "$BASE/notes" -H "Content-Type: application/json" \
-  -d '{"title":"Hello","note":"World"}'
-
-# List
-curl "$BASE/notes"
-
-# Get / Update / Delete (replace {id})
-curl "$BASE/notes/{id}"
-curl -X PUT "$BASE/notes/{id}" -H "Content-Type: application/json" \
-  -d '{"title":"Updated","note":"Body"}'
-curl -X DELETE "$BASE/notes/{id}"
-```
+Keep bytecode out of the tree: compile with `PYTHONDONTWRITEBYTECODE=1` and
+never commit `__pycache__/` or `*.pyc`.

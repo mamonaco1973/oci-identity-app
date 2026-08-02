@@ -3,150 +3,67 @@
 # File: validate.sh
 # ================================================================================
 # Purpose:
-#   Validates the Notes API by exercising all CRUD endpoints:
-#     POST   /notes        (create 5 notes)
-#     GET    /notes        (list notes)
-#     GET    /notes/{id}   (get note)
-#     PUT    /notes/{id}   (update note)
-#     DELETE /notes/{id}   (delete note)
+#   Post-deploy check for the JWT-authenticated Notes API.  Unlike the
+#   unauthenticated oci-crud-example, the CRUD endpoints now require a valid
+#   Identity Domains token, so an end-to-end curl loop would need an interactive
+#   browser login.  Instead this script:
+#     1. Confirms the API rejects an UNauthenticated request (proves the JWT
+#        authenticator is wired up and enforcing).
+#     2. Prints the web app URL and manual test instructions.
 #
-# Requirements:
-#   - oci CLI configured
-#   - curl, jq
-#   - 01-functions terraform state accessible (for output)
-#
-# Notes:
-#   - Discovers the API Gateway endpoint from Terraform output.
-#   - Owner is hardcoded to "global" in function logic.
+# Requirements: oci CLI configured, curl, jq, 03-functions/04-webapp TF state.
 # ================================================================================
 
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# Step 1: Discover API Gateway endpoint
+# Discover endpoints from Terraform output
 # ------------------------------------------------------------------------------
 echo "NOTE: Locating API Gateway endpoint..."
-
 API_BASE=$(cd 03-functions && terraform output -raw api_gateway_endpoint)
+WEBAPP_URL=$(cd 04-webapp && terraform output -raw website_url 2>/dev/null || echo "N/A")
 
 echo "NOTE: API Gateway URL - ${API_BASE}"
 
 # ------------------------------------------------------------------------------
-# Step 2: Create 5 notes
+# Negative test — an unauthenticated call MUST be rejected by the gateway
 # ------------------------------------------------------------------------------
-echo "NOTE: Creating 5 test notes..."
-
-NOTE_IDS=()
-
-for i in {1..5}; do
-  PAYLOAD=$(jq -n \
-    --arg title "Test Note ${i}" \
-    --arg note  "This is test note ${i}" \
-    '{ title: $title, note: $note }')
-
-  RESPONSE=$(curl -s -X POST "${API_BASE}/notes" \
-    -H "Content-Type: application/json" \
-    -d "${PAYLOAD}")
-
-  NOTE_ID=$(echo "${RESPONSE}" | jq -r '.id // empty')
-
-  if [[ -z "${NOTE_ID}" ]]; then
-    echo "ERROR: Failed to create note ${i}"
-    echo "RESPONSE: ${RESPONSE}"
-    exit 1
-  fi
-
-  NOTE_IDS+=("${NOTE_ID}")
-  echo "NOTE: Created note ${i} (id=${NOTE_ID})"
-done
-
+# The gateway validates the JWT before the function runs, so no token → 401
+# (some configurations return 403).  Either proves auth is enforced; a 2xx here
+# would mean the routes are open and the deploy is broken.
 # ------------------------------------------------------------------------------
-# Step 3: List notes
-# ------------------------------------------------------------------------------
-echo "NOTE: Listing notes..."
+echo "NOTE: Verifying unauthenticated requests are rejected..."
 
-LIST_RESPONSE=$(curl -s "${API_BASE}/notes")
-NOTE_COUNT=$(echo "${LIST_RESPONSE}" | jq '.items | length')
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "${API_BASE}/notes")
 
-if [[ "${NOTE_COUNT}" -lt 5 ]]; then
-  echo "ERROR: Expected at least 5 notes, got ${NOTE_COUNT}"
+if [[ "${STATUS}" == "401" || "${STATUS}" == "403" ]]; then
+  echo "NOTE: Unauthenticated GET /notes correctly rejected (HTTP ${STATUS})."
+else
+  echo "ERROR: Expected 401/403 without a token, got HTTP ${STATUS}."
+  echo "ERROR: The JWT authenticator may not be enforcing — check api.tf."
   exit 1
 fi
 
-echo "NOTE: List endpoint returned ${NOTE_COUNT} notes"
-
 # ------------------------------------------------------------------------------
-# Step 4: Get each note by ID
+# Summary + manual test instructions
 # ------------------------------------------------------------------------------
-echo "NOTE: Fetching each created note..."
+cat <<EOF
 
-for ID in "${NOTE_IDS[@]}"; do
-  GET_RESPONSE=$(curl -s "${API_BASE}/notes/${ID}")
-  TITLE=$(echo "${GET_RESPONSE}" | jq -r '.title // empty')
+=================================================================================
+  Deployment validated (auth enforced)!
+=================================================================================
+  API : ${API_BASE}
+  Web : ${WEBAPP_URL}
 
-  if [[ -z "${TITLE}" ]]; then
-    echo "ERROR: Failed to fetch note ${ID}"
-    echo "RESPONSE: ${GET_RESPONSE}"
-    exit 1
-  fi
+  Manual end-to-end test:
+    1. Open the Web URL above and click "Sign in".
+    2. Authenticate with an Identity Domains user, then create/list notes.
 
-  echo "NOTE: Retrieved note ${ID} (${TITLE})"
-done
-
-# ------------------------------------------------------------------------------
-# Step 5: Update each note
-# ------------------------------------------------------------------------------
-echo "NOTE: Updating each note..."
-
-for ID in "${NOTE_IDS[@]}"; do
-  CURRENT=$(curl -s "${API_BASE}/notes/${ID}")
-  TITLE=$(echo "${CURRENT}" | jq -r '.title // empty')
-
-  if [[ -z "${TITLE}" ]]; then
-    echo "ERROR: Failed to fetch existing note ${ID}"
-    exit 1
-  fi
-
-  UPDATE_PAYLOAD=$(jq -n \
-    --arg title "${TITLE}" \
-    --arg note  "Updated note for ${ID}" \
-    '{ title: $title, note: $note }')
-
-  UPDATE_RESPONSE=$(curl -s -X PUT "${API_BASE}/notes/${ID}" \
-    -H "Content-Type: application/json" \
-    -d "${UPDATE_PAYLOAD}")
-
-  UPDATED_TITLE=$(echo "${UPDATE_RESPONSE}" | jq -r '.title // empty')
-
-  if [[ -z "${UPDATED_TITLE}" ]]; then
-    echo "ERROR: Failed to update note ${ID}"
-    echo "RESPONSE: ${UPDATE_RESPONSE}"
-    exit 1
-  fi
-
-  echo "NOTE: Updated note ${ID}"
-done
-
-# ------------------------------------------------------------------------------
-# Step 6: Delete each note
-# ------------------------------------------------------------------------------
-echo "NOTE: Deleting each note..."
-
-for ID in "${NOTE_IDS[@]}"; do
-  curl -s -X DELETE "${API_BASE}/notes/${ID}" > /dev/null
-  echo "NOTE: Deleted note ${ID}"
-done
-
-# ------------------------------------------------------------------------------
-# Summary
-# ------------------------------------------------------------------------------
-
-WEBAPP_URL=$(cd 04-webapp && terraform output -raw website_url 2>/dev/null || echo "N/A")
-
-echo ""
-echo "================================================================================="
-echo "  Deployment validated!"
-echo "================================================================================="
-echo "  API : ${API_BASE}"
-echo "  Web : ${WEBAPP_URL}"
-echo "================================================================================="
+  Manual API test with a token (copy id_token from browser sessionStorage):
+    JWT="<paste sessionStorage.id_token>"
+    curl -H "Authorization: Bearer \$JWT" ${API_BASE}/notes
+    curl -X POST -H "Authorization: Bearer \$JWT" \\
+      -H "Content-Type: application/json" \\
+      -d '{"title":"Hello","note":"World"}' ${API_BASE}/notes
+=================================================================================
+EOF

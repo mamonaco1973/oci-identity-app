@@ -124,10 +124,23 @@ echo "NOTE: [Phase 3/4] Deploying Functions, NoSQL, and API Gateway..."
 cd 03-functions || { echo "ERROR: 03-functions directory missing."; exit 1; }
 terraform init
 terraform apply -auto-approve
+
+# Read everything Phase 4 needs: API URL, the web bucket (created here so the
+# Identity Domains app could register its callback URL), and the OAuth config.
 API_BASE=$(terraform output -raw api_gateway_endpoint)
+WEB_BUCKET=$(terraform output -raw web_bucket_name)
+WEBSITE_URL=$(terraform output -raw website_url)
+SPA_CLIENT_ID=$(terraform output -raw spa_client_id)
+DOMAIN_URL=$(terraform output -raw identity_domain_url)
 cd ..
 
 echo "NOTE: API Gateway endpoint - ${API_BASE}"
+echo "NOTE: Web bucket           - ${WEB_BUCKET}"
+echo "NOTE: SPA client_id        - ${SPA_CLIENT_ID}"
+
+# The OAuth redirect must match the URI registered on the app exactly; derive it
+# from the hosted index.html URL (…/o/index.html → …/o/callback.html).
+REDIRECT_URI="${WEBSITE_URL%/index.html}/callback.html"
 
 # ------------------------------------------------------------------------------
 # Phase 4: Build and deploy the static web application
@@ -143,8 +156,20 @@ envsubst '${API_BASE}' < index.html.tmpl > index.html || {
   exit 1
 }
 
+# SPA runtime config consumed by index.html + callback.html. Not committed
+# (see .gitignore) — regenerated on every apply.
+echo "NOTE: Writing config.json..."
+cat > config.json <<EOF
+{
+  "domainUrl": "${DOMAIN_URL}",
+  "clientId": "${SPA_CLIENT_ID}",
+  "redirectUri": "${REDIRECT_URI}",
+  "apiBaseUrl": "${API_BASE}"
+}
+EOF
+
 terraform init
-terraform apply -auto-approve
+terraform apply -auto-approve -var="web_bucket_name=${WEB_BUCKET}"
 cd ..
 
 # ------------------------------------------------------------------------------
