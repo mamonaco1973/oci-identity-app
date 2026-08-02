@@ -123,6 +123,21 @@ if [ -n "${PROFILE_ID}" ] && [ "${PROFILE_ID}" != "null" ]; then
   echo "NOTE: Self-registration profile '${PROFILE_NAME}' already exists."
 else
   echo "NOTE: Creating self-registration profile '${PROFILE_NAME}'..."
+
+  # The CLI requires --email-template even though activation email is off (so it
+  # never actually sends). Reference any existing template in the domain: prefer
+  # a registration-related one, else fall back to the first available.
+  EMAIL_TEMPLATE_ID=$(oci identity-domains email-templates list \
+    --endpoint "${ENDPOINT}" \
+    --query "data.resources[?contains(id, 'egistration')].id | [0]" \
+    --raw-output 2>/dev/null || echo "")
+  if [ -z "${EMAIL_TEMPLATE_ID}" ] || [ "${EMAIL_TEMPLATE_ID}" = "null" ]; then
+    EMAIL_TEMPLATE_ID=$(oci identity-domains email-templates list \
+      --endpoint "${ENDPOINT}" \
+      --query 'data.resources[0].id' --raw-output 2>/dev/null || echo "")
+  fi
+  echo "NOTE: Using email template - ${EMAIL_TEMPLATE_ID:-<none found>}"
+
   # Immediate sign-in (activation-email-required=false), no consent step, and the
   # default consumer attribute set (first/last/email/username/password).
   echo y | oci identity-domains self-registration-profile create \
@@ -130,6 +145,7 @@ else
     --schemas '["urn:ietf:params:scim:schemas:oracle:idcs:SelfRegistrationProfile"]' \
     --name "${PROFILE_NAME}" \
     --display-name "[{\"value\":\"${SIGNUP_LINK_TEXT}\",\"locale\":\"en-US\",\"default\":true}]" \
+    --email-template "{\"value\":\"${EMAIL_TEMPLATE_ID}\"}" \
     --activation-email-required false \
     --consent-text-present false \
     --show-on-login-page true \
