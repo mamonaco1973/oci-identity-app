@@ -34,6 +34,10 @@ export TF_VAR_tenancy_ocid="$TENANCY_OCID"
 export TF_VAR_compartment_id="$OCI_COMPARTMENT_ID"
 export TF_VAR_region="$REGION"
 
+# Must match the domain used at apply time so the data source resolves the same
+# domain (and the correct app to deactivate).  Defaults to the Default domain.
+export TF_VAR_domain_display_name="${OCI_DOMAIN_NAME:-Default}"
+
 # ------------------------------------------------------------------------------
 # Phase 4: Destroy static web application
 # ------------------------------------------------------------------------------

@@ -88,6 +88,12 @@ export TF_VAR_tenancy_ocid="$TENANCY_OCID"
 export TF_VAR_compartment_id="$OCI_COMPARTMENT_ID"
 export TF_VAR_region="$REGION"
 
+# Identity domain that holds the SPA app + self-registration profile.  Create the
+# domain once in the console (Terraform can't cleanly create/destroy domains),
+# then point at it here.  Defaults to the tenancy's Default domain.
+export TF_VAR_domain_display_name="${OCI_DOMAIN_NAME:-Default}"
+echo "NOTE: Identity domain - ${TF_VAR_domain_display_name}"
+
 # Export OCIR vars for 02-docker/build.sh.
 export OCIR_HOST OCIR_TOKEN OCIR_USERNAME NAMESPACE
 
