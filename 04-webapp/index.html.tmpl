@@ -454,8 +454,10 @@
     }
     // OCI's stock sign-in page won't render the self-registration link even with
     // show_on_login_page=true, so link straight to the hosted signup form.
-    window.location.href =
+    // Open in a NEW tab so the app stays put (register there, then sign in here).
+    const signupUrl =
       authBase() + "/ui/v1/signup?profileid=" + encodeURIComponent(AUTH.signupProfileId);
+    window.open(signupUrl, "_blank", "noopener");
   }
 
   // ===================== State ======================
