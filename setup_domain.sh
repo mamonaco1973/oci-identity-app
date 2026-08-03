@@ -126,6 +126,79 @@ echo y | oci identity-domains setting patch \
   || echo "WARN: Could not set signingCertPublicAccess — enable it in the console if calls 500."
 
 # ------------------------------------------------------------------------------
+# 2b. Disable the self-registration email-verification notification
+# ------------------------------------------------------------------------------
+# By default the domain emails each new self-registered user a "verify your
+# email" link that lands on /ui/v1/signin and errors when clicked cold. We don't
+# need it (accounts are active immediately), so turn it off. eventId
+# admin.me.register.success == the console's "Self-registration email
+# verification" toggle (Notifications tab). There's no CLI/SDK for notification
+# settings, so read + patch it via SCIM with the signer. Idempotent, best-effort.
+# ------------------------------------------------------------------------------
+echo "NOTE: Disabling self-registration email-verification notification..."
+OCI_PY=$(head -1 "$(command -v oci)" | sed 's/^#!//')
+"${OCI_PY}" - "${ENDPOINT}" <<'PY' || echo "WARN: could not disable it — turn off 'Self-registration email verification' in the Notifications tab."
+import sys, oci
+from oci._vendor import requests
+cfg = oci.config.from_file()
+ep = sys.argv[1].rstrip('/')
+signer = oci.signer.Signer(cfg['tenancy'], cfg['user'], cfg['fingerprint'],
+                           cfg['key_file'], pass_phrase=cfg.get('pass_phrase'))
+g = requests.get(ep + '/admin/v1/NotificationSettings', auth=signer)
+g.raise_for_status()
+data = g.json()
+ns = data.get('Resources', [data])[0]
+nsid = ns.get('id', 'NotificationSettings')
+evs = ns.get('eventSettings', [])
+changed = False
+for ev in evs:
+    if ev.get('eventId') == 'admin.me.register.success' and ev.get('enabled'):
+        ev['enabled'] = False
+        changed = True
+if not changed:
+    print('already disabled'); sys.exit(0)
+patch = {"schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+         "Operations": [{"op": "replace", "path": "eventSettings", "value": evs}]}
+p = requests.patch(ep + '/admin/v1/NotificationSettings/' + nsid, auth=signer, json=patch)
+p.raise_for_status()
+print('disabled (HTTP %s)' % p.status_code)
+PY
+
+# ------------------------------------------------------------------------------
+# 2c. Disable MFA factors (no enrollment prompt on first login)
+# ------------------------------------------------------------------------------
+# MFA isn't enforced (mfaEnabledCategory=NONE, enrollment Optional), but the
+# factors are enabled, so first login still OFFERS enrollment — and completing
+# it breaks the OAuth redirect back to the app (user lands on "My Apps"). For a
+# demo we don't want MFA at all, so disable every enrollable factor. Safe because
+# MFA is not required; if it ever were, this would need the sign-on policy too.
+# ------------------------------------------------------------------------------
+echo "NOTE: Disabling MFA factors (skip enrollment on first login)..."
+"${OCI_PY}" - "${ENDPOINT}" <<'PY' || echo "WARN: could not disable MFA factors — turn them off under Security > Authentication factors."
+import sys, oci
+from oci._vendor import requests
+cfg = oci.config.from_file()
+ep = sys.argv[1].rstrip('/')
+signer = oci.signer.Signer(cfg['tenancy'], cfg['user'], cfg['fingerprint'],
+                           cfg['key_file'], pass_phrase=cfg.get('pass_phrase'))
+FACTORS = ["totpEnabled", "pushEnabled", "fidoAuthenticatorEnabled", "bypassCodeEnabled",
+           "emailEnabled", "smsEnabled", "phoneCallEnabled", "securityQuestionsEnabled",
+           "totpExtEnabled", "yubicoOtpEnabled", "faceBiometricEnabled"]
+g = requests.get(ep + '/admin/v1/AuthenticationFactorSettings', auth=signer)
+g.raise_for_status()
+data = g.json()
+s = data.get('Resources', [data])[0]
+sid = s.get('id', 'AuthenticationFactorSettings')
+ops = [{"op": "replace", "path": f, "value": False} for f in FACTORS if s.get(f) is True]
+if not ops:
+    print('already disabled'); sys.exit(0)
+patch = {"schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"], "Operations": ops}
+p = requests.patch(ep + '/admin/v1/AuthenticationFactorSettings/' + sid, auth=signer, json=patch)
+p.raise_for_status()
+print('MFA factors disabled (HTTP %s)' % p.status_code)
+PY
+
+# ------------------------------------------------------------------------------
 # 3. Find or create the self-registration profile
 # ------------------------------------------------------------------------------
 find_profile_id() {
