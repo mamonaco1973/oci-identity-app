@@ -251,6 +251,10 @@ does everything the login side needs, with **zero console clicks**:
    scripts source automatically. Override the domain/profile names with those
    env vars if you like (defaults `notes-app` / `spa-signup`).
 
+To undo all of this, run [`delete_domain.sh`](delete_domain.sh) — it deactivates
+and deletes the domain (which also drops the self-registration profile) and
+removes `env.sh`. Run it after `destroy.sh`.
+
 ### Build Results
 
 When the deployment completes, the following resources are created:
@@ -307,6 +311,9 @@ When the deployment completes, the following resources are created:
 - **Automation & Validation:**
   - `apply.sh`, `destroy.sh`, and `check_env.sh` scripts automate provisioning,
     teardown, and environment validation
+  - `delete_domain.sh` is the inverse of `setup_domain.sh` — it deactivates and
+    deletes the identity domain (Terraform can't) and removes `env.sh`. Run it
+    **after** `destroy.sh` to fully tear the demo down
   - `validate.sh` performs end-to-end API verification using curl and jq
   - Entire workflow runs using Terraform and the OCI CLI—no manual OCI console
     setup required
