@@ -25,7 +25,7 @@ routes requests to dedicated OCI Functions, OCI NoSQL Database provides fully
 managed persistence, and OCI handles scaling, availability, and fault tolerance
 automatically.
 
-![diagram](oci-crud-example.png)
+![diagram](oci-identity-app.png)
 
 Key capabilities demonstrated:
 
